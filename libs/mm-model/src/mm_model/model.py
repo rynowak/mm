@@ -133,6 +133,7 @@ class GPT(nn.Module):
         Returns:
             Token indices of shape (batch, seq_len + max_new_tokens).
         """
+        was_training = self.training
         self.eval()
         for _ in range(max_new_tokens):
             # Crop to context length
@@ -149,4 +150,6 @@ class GPT(nn.Module):
             next_token = torch.multinomial(probs, num_samples=1)
             idx = torch.cat([idx, next_token], dim=1)
 
+        if was_training:
+            self.train()
         return idx

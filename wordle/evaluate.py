@@ -18,7 +18,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import torch
-import torch.nn.functional as F
 from mm_model import GPT, GPTConfig, load_checkpoint
 from mm_tokenizers import CharTokenizer
 from mm_training import get_device, seed_everything
@@ -53,79 +52,26 @@ def load_model(checkpoint_path: str, device: torch.device) -> tuple[GPT, GPTConf
 # Constrained decoding
 # ---------------------------------------------------------------------------
 
-WORD_BATCH_SIZE = 1000
-
-
 @torch.no_grad()
-def score_words(
+def generate_guess(
     model: GPT,
     tokenizer: CharTokenizer,
     game_state: GameState,
-    valid_words: list[str],
     device: torch.device,
-) -> list[tuple[str, float]]:
-    """Score all valid words by computing character-level log probs.
+) -> str:
+    """Generate a 5-character guess autoregressively (greedy).
 
-    The game state is serialized to tokens. For each candidate word, we append
-    its 5 character tokens and run the model forward to get log probs at the
-    positions corresponding to those characters. Words are processed in batches
-    for memory efficiency.
-
-    Returns a list of (word, total_log_prob) sorted descending by score.
+    Uses the same game_state_to_tokens format as the training scripts.
     """
-    # Encode game state (without the trailing [eos] -- we want to continue generating)
     state_tokens = game_state_to_tokens(game_state)
-    # Remove the trailing [eos] so we can append word characters
-    if state_tokens and state_tokens[-1] == "[eos]":
-        state_tokens = state_tokens[:-1]
-
-    # If there are previous guesses, add a [sep] before the next guess
-    if game_state.guesses:
-        state_tokens.append("[sep]")
-
     state_ids = tokenizer.encode("".join(state_tokens))
-    prefix_len = len(state_ids)
-
-    scored: list[tuple[str, float]] = []
-
-    # Process in batches
-    for batch_start in range(0, len(valid_words), WORD_BATCH_SIZE):
-        batch_words = valid_words[batch_start : batch_start + WORD_BATCH_SIZE]
-        batch_size = len(batch_words)
-
-        # Build input sequences: state_ids + 5 character ids for each word
-        # We need positions prefix_len-1 through prefix_len+3 for the 5 char predictions
-        # (the model predicts the next token at each position)
-        sequences: list[list[int]] = []
-        for word in batch_words:
-            word_ids = tokenizer.encode(word)
-            sequences.append(state_ids + word_ids)
-
-        seq_len = prefix_len + 5
-        input_tensor = torch.tensor(sequences, dtype=torch.long, device=device)
-        assert input_tensor.shape == (batch_size, seq_len)
-
-        # Forward pass
-        logits, _ = model(input_tensor)
-
-        # Compute log probs at positions where we predict word characters
-        # Position i predicts token at position i+1, so:
-        # logits[:, prefix_len-1, :] predicts the 1st char (at index prefix_len)
-        # logits[:, prefix_len+0, :] predicts the 2nd char (at index prefix_len+1)
-        # ...
-        # logits[:, prefix_len+3, :] predicts the 5th char (at index prefix_len+4)
-        log_probs = F.log_softmax(logits, dim=-1)
-
-        for i, word in enumerate(batch_words):
-            word_ids = tokenizer.encode(word)
-            total_log_prob = 0.0
-            for j in range(5):
-                # Position prefix_len-1+j predicts token at prefix_len+j
-                total_log_prob += log_probs[i, prefix_len - 1 + j, word_ids[j]].item()
-            scored.append((word, total_log_prob))
-
-    scored.sort(key=lambda x: x[1], reverse=True)
-    return scored
+    prompt = torch.tensor([state_ids], dtype=torch.long, device=device)
+    output = model.generate(prompt, max_new_tokens=5, temperature=0.1, top_k=5)
+    generated_ids = output[0, len(state_ids) :].tolist()
+    try:
+        return tokenizer.decode(generated_ids)
+    except ValueError:
+        return "?????"
 
 
 def select_guess(
@@ -136,32 +82,13 @@ def select_guess(
     device: torch.device,
     decoding: str = "constrained",
 ) -> str:
-    """Select the next guess using the model.
+    """Select the next guess using autoregressive generation.
 
-    With constrained decoding, scores all valid words and picks the best.
-    With unconstrained decoding, uses autoregressive generation and hopes
-    the model produces a valid word.
+    Both constrained and unconstrained modes use the same generation approach.
+    The model generates 5 characters autoregressively from the game state,
+    using the same token format as the training scripts.
     """
-    if decoding == "constrained":
-        scored = score_words(model, tokenizer, game_state, valid_words, device)
-        return scored[0][0]
-    else:
-        # Unconstrained: generate 5 tokens autoregressively
-        state_tokens = game_state_to_tokens(game_state)
-        if state_tokens and state_tokens[-1] == "[eos]":
-            state_tokens = state_tokens[:-1]
-        if game_state.guesses:
-            state_tokens.append("[sep]")
-
-        state_ids = tokenizer.encode("".join(state_tokens))
-        input_tensor = torch.tensor([state_ids], dtype=torch.long, device=device)
-        output = model.generate(input_tensor, max_new_tokens=5, temperature=0.1, top_k=10)
-        generated_ids = output[0, len(state_ids) :].tolist()
-        try:
-            word = tokenizer.decode(generated_ids)
-        except ValueError:
-            word = "xxxxx"  # invalid fallback
-        return word
+    return generate_guess(model, tokenizer, game_state, device)
 
 
 # ---------------------------------------------------------------------------

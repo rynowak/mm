@@ -59,7 +59,7 @@ def compute_reward(
         return config.failed
 
     # Check if guess contradicts known clues from previous guesses
-    if _contradicts_clues(guess, feedback, state.guesses[:-1] if state.guesses else []):
+    if _contradicts_clues(guess, state.guesses[:-1] if state.guesses else []):
         return config.contradicts_clues
 
     # Score based on new information from feedback
@@ -82,7 +82,6 @@ def compute_reward(
 
 def _contradicts_clues(
     guess: str,
-    feedback: list[LetterFeedback],
     previous_guesses: list[GuessFeedback],
 ) -> bool:
     """Check if a guess contradicts information from previous guesses.

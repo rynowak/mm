@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
+
+if TYPE_CHECKING:
+    from pathlib import Path
 from pydantic import BaseModel
 
 
@@ -68,6 +71,7 @@ class RewardModelConfig(BaseModel):
     invalid_word: float = -1.0
     repeated_guess: float = -0.5
     contradicts_clues: float = -0.3
+    no_new_info: float = 0.0
     green_letter: float = 0.2
     yellow_letter: float = 0.1
     solved: float = 1.0

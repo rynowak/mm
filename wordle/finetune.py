@@ -108,6 +108,7 @@ def build_reward_config(config: FinetuneConfig) -> RewardConfig:
         invalid_word=rc.invalid_word,
         repeated_guess=rc.repeated_guess,
         contradicts_clues=rc.contradicts_clues,
+        no_new_info=rc.no_new_info,
         green_letter=rc.green_letter,
         yellow_letter=rc.yellow_letter,
         solved=rc.solved,
@@ -392,7 +393,7 @@ def play_game_grpo(
     clip_epsilon: float,
     kl_beta: float,
     constrained: bool,
-) -> tuple[Tensor, dict[str, float], GameReplay]:
+) -> tuple[Tensor, dict[str, float], GameReplay, float]:
     """Play a Wordle game with GRPO training, collecting loss across turns.
 
     For each turn:
@@ -402,10 +403,11 @@ def play_game_grpo(
     4. Pick the best guess to actually play
 
     Returns:
-        (total_loss, aggregated_metrics, replay)
+        (total_loss, aggregated_metrics, replay, total_reward)
     """
     state = env.reset(target_word)
     total_loss = torch.tensor(0.0, device=device)
+    total_reward = 0.0
     metrics_accum: dict[str, list[float]] = {
         "policy_loss": [],
         "kl_div": [],
@@ -451,23 +453,25 @@ def play_game_grpo(
 
         rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=device)
 
-        # Compute log probs under current policy (with gradients)
+        # Build sequences for scoring
         prompt_expanded = state_ids.unsqueeze(0).expand(group_size, -1)
         full_sequences = torch.cat([prompt_expanded, word_ids_batch], dim=-1)
         prompt_len = state_ids.shape[0]
 
-        logits_current, _ = model(full_sequences)
-        completion_logits = logits_current[:, prompt_len - 1 : prompt_len - 1 + 5, :]
-        current_log_probs = sequence_log_probs(completion_logits, word_ids_batch)  # (group_size, 5)
-
-        # Old policy log probs (detached -- these are the "before gradient step" probs)
-        old_log_probs = current_log_probs.detach()
-
-        # Reference policy log probs
+        # Old policy log probs (before gradient step) and reference log probs
         with torch.no_grad():
+            old_logits, _ = model(full_sequences)
+            old_completion_logits = old_logits[:, prompt_len - 1 : prompt_len - 1 + 5, :]
+            old_log_probs = sequence_log_probs(old_completion_logits, word_ids_batch)
+
             ref_logits, _ = ref_model(full_sequences)
             ref_completion_logits = ref_logits[:, prompt_len - 1 : prompt_len - 1 + 5, :]
-            ref_log_probs = sequence_log_probs(ref_completion_logits, word_ids_batch)  # (group_size, 5)
+            ref_log_probs = sequence_log_probs(ref_completion_logits, word_ids_batch)
+
+        # Current policy log probs (with gradients for backprop)
+        logits_current, _ = model(full_sequences)
+        completion_logits = logits_current[:, prompt_len - 1 : prompt_len - 1 + 5, :]
+        current_log_probs = sequence_log_probs(completion_logits, word_ids_batch)
 
         # Compute GRPO loss
         turn_loss, turn_metrics = grpo_loss(
@@ -488,6 +492,7 @@ def play_game_grpo(
         # Pick the best guess to actually play (highest reward)
         best_idx = rewards_tensor.argmax().item()
         chosen_guess = guesses[best_idx]
+        total_reward += rewards[best_idx]
 
         # Play the chosen guess
         new_state, _done = env.step(state, chosen_guess)
@@ -517,7 +522,7 @@ def play_game_grpo(
         turns=state.turn,
     )
 
-    return total_loss, aggregated, replay
+    return total_loss, aggregated, replay, total_reward
 
 
 # ---------------------------------------------------------------------------
@@ -918,7 +923,7 @@ def train(config: FinetuneConfig, checkpoint_path: str) -> None:
             batch_rewards: list[float] = []
 
             for target in batch_targets:
-                game_loss, game_metrics, replay = play_game_grpo(
+                game_loss, game_metrics, replay, game_reward = play_game_grpo(
                     model=model,
                     ref_model=ref_model,
                     env=env,
@@ -947,18 +952,7 @@ def train(config: FinetuneConfig, checkpoint_path: str) -> None:
                 for g in replay.guesses:
                     recent_valid.append(g in valid_words)
 
-                # Approximate total reward from last turn
-                total_r = sum(
-                    compute_reward(
-                        env.reset(target),
-                        g,
-                        [],
-                        valid_words,
-                        reward_config,
-                    )
-                    for g in replay.guesses
-                )
-                batch_rewards.append(total_r)
+                batch_rewards.append(game_reward)
 
             # Average loss over batch
             batch_loss = batch_loss / batch_size

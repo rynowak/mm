@@ -65,30 +65,22 @@ def grpo_loss(
     # Step 1: Normalize rewards to get advantages
     advantages = compute_group_advantages(rewards)  # (group_size,)
 
-    # Step 2: Compute per-token log ratios
-    log_ratios = log_probs - old_log_probs  # (group_size, seq_len)
+    # Step 2: Compute per-token probability ratios
+    token_log_ratios = log_probs - old_log_probs  # (group_size, seq_len)
+    token_ratios = torch.exp(token_log_ratios)  # (group_size, seq_len)
 
-    # Step 3: Sum log ratios over sequence to get per-completion log ratio
-    # then exponentiate to get the probability ratio
-    completion_log_ratios = log_ratios.sum(dim=-1)  # (group_size,)
-    ratios = torch.exp(completion_log_ratios)  # (group_size,)
-
-    # Step 4: Clipped surrogate objective
-    # unclipped: ratio * advantage
-    # clipped: clip(ratio, 1-eps, 1+eps) * advantage
-    # take the min (pessimistic bound)
-    unclipped = ratios * advantages
-    clipped_ratios = torch.clamp(ratios, 1.0 - clip_epsilon, 1.0 + clip_epsilon)
-    clipped = clipped_ratios * advantages
-    surrogate = torch.min(unclipped, clipped)
+    # Step 3: Per-token clipped surrogate objective
+    # Clip each token's ratio independently, then weight by advantage
+    unclipped = token_ratios * advantages.unsqueeze(-1)  # (group_size, seq_len)
+    clipped_ratios = torch.clamp(token_ratios, 1.0 - clip_epsilon, 1.0 + clip_epsilon)
+    clipped = clipped_ratios * advantages.unsqueeze(-1)  # (group_size, seq_len)
+    surrogate = torch.min(unclipped, clipped)  # (group_size, seq_len)
     policy_loss = -surrogate.mean()
 
-    # Step 5: KL divergence from reference policy
-    # KL(current || ref) = sum over tokens of (current_log_prob - ref_log_prob)
-    # averaged over completions
+    # Step 4: KL penalty from reference policy
+    # Single-sample estimate: mean of (log_current - log_ref) over tokens
     kl_per_token = log_probs - ref_log_probs  # (group_size, seq_len)
-    kl_per_completion = kl_per_token.sum(dim=-1)  # (group_size,)
-    kl_div = kl_per_completion.mean()
+    kl_div = kl_per_token.mean()
 
     # Total loss = policy loss + beta * KL penalty
     loss = policy_loss + beta * kl_div
@@ -96,8 +88,8 @@ def grpo_loss(
     # Compute entropy: -sum(p * log_p) approximated as -mean(log_probs)
     entropy = -log_probs.mean()
 
-    # Compute clip fraction: how often was the ratio clipped?
-    clip_fraction = ((ratios > 1.0 + clip_epsilon) | (ratios < 1.0 - clip_epsilon)).float().mean().item()
+    # Compute clip fraction: how often was a token ratio clipped?
+    clip_fraction = ((token_ratios > 1.0 + clip_epsilon) | (token_ratios < 1.0 - clip_epsilon)).float().mean().item()
 
     metrics = {
         "policy_loss": policy_loss.item(),

@@ -76,6 +76,7 @@ def _tokenize_tinystories(
             continue
 
         encoded = tokenizer.encode("".join(filtered))
+        tokens.append(tokenizer.bos_id)
         tokens.extend(encoded)
         tokens.append(tokenizer.eos_id)
 
@@ -94,8 +95,8 @@ def _tokenize_word_lists(
     repeats = config["data"]["word_list_repeats"]
     words = sorted(all_valid_words())
 
-    # Build one pass of the word list: word1[sep]word2[sep]...wordN[eos]
-    single_pass: list[int] = []
+    # Build one pass of the word list: [bos]word1[sep]word2[sep]...wordN[eos]
+    single_pass: list[int] = [tokenizer.bos_id]
     for i, word in enumerate(words):
         single_pass.extend(tokenizer.encode(word))
         if i < len(words) - 1:
@@ -134,19 +135,17 @@ def load_pretrain_data(
     word_tokens = _tokenize_word_lists(config, tokenizer)
     print(f"  Word lists: {len(word_tokens):,} tokens")
 
-    # Concatenate all tokens
-    all_tokens = story_tokens + word_tokens
-    print(f"  Total: {len(all_tokens):,} tokens")
+    # Use story tokens for both train and val (split by fraction),
+    # then add word list tokens only to training data
+    n_val = int(len(story_tokens) * val_fraction)
+    n_train_stories = len(story_tokens) - n_val
 
-    # Convert to tensor
-    all_tokens_t = torch.tensor(all_tokens, dtype=torch.long)
+    train_all = story_tokens[:n_train_stories] + word_tokens
+    val_all = story_tokens[n_train_stories:]
+    print(f"  Total train: {len(train_all):,} tokens, val: {len(val_all):,} tokens")
 
-    # Split into train/val
-    n_val = int(len(all_tokens_t) * val_fraction)
-    n_train = len(all_tokens_t) - n_val
-
-    train_tokens = all_tokens_t[:n_train]
-    val_tokens = all_tokens_t[n_train:]
+    train_tokens = torch.tensor(train_all, dtype=torch.long)
+    val_tokens = torch.tensor(val_all, dtype=torch.long)
 
     train_dataset = TokenBlockDataset(train_tokens, block_size)
     val_dataset = TokenBlockDataset(val_tokens, block_size)

@@ -44,11 +44,16 @@ class MovingAverageBaseline:
     def __init__(self, momentum: float = 0.99) -> None:
         self.value: float = 0.0
         self.momentum = momentum
+        self._n_updates: int = 0
 
     def update(self, reward: float) -> None:
         """Update the baseline with a new observed reward."""
         self.value = self.momentum * self.value + (1.0 - self.momentum) * reward
+        self._n_updates += 1
 
     def get(self) -> float:
-        """Return the current baseline value."""
-        return self.value
+        """Return bias-corrected baseline value (like Adam)."""
+        if self._n_updates == 0:
+            return 0.0
+        correction = 1.0 - self.momentum**self._n_updates
+        return self.value / correction

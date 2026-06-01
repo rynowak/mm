@@ -85,11 +85,11 @@ class TestMovingAverageBaseline:
         assert baseline.get() == 0.0
 
     def test_single_update(self) -> None:
-        """After one update, value is (1 - momentum) * reward."""
+        """After one update, bias-corrected value equals the reward."""
         baseline = MovingAverageBaseline(momentum=0.9)
         baseline.update(10.0)
-        # value = 0.9 * 0.0 + 0.1 * 10.0 = 1.0
-        assert abs(baseline.get() - 1.0) < 1e-8
+        # raw = 0.1 * 10 = 1.0, correction = 1 - 0.9^1 = 0.1, corrected = 10.0
+        assert abs(baseline.get() - 10.0) < 1e-8
 
     def test_tracks_running_average(self) -> None:
         """Converges toward the observed reward over multiple updates."""
@@ -103,15 +103,18 @@ class TestMovingAverageBaseline:
         assert abs(baseline.get() - 5.0) < 0.01
 
     def test_custom_momentum(self) -> None:
-        """Different momentum values produce different convergence rates."""
+        """Different momentum values converge at different rates over many updates."""
         fast = MovingAverageBaseline(momentum=0.5)
         slow = MovingAverageBaseline(momentum=0.99)
 
-        fast.update(10.0)
-        slow.update(10.0)
+        # After one update, bias correction makes both return the reward
+        # After many updates with varying rewards, they diverge
+        for v in [10.0, 5.0, 5.0, 5.0]:
+            fast.update(v)
+            slow.update(v)
 
-        # Fast tracker adapts faster
-        assert fast.get() > slow.get()
+        # Fast tracker adapts faster toward recent value of 5.0
+        assert fast.get() < slow.get()
 
 
 class TestComputeGroupAdvantages:
