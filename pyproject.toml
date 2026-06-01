@@ -3,7 +3,20 @@ name = "mm"
 version = "0.1.0"
 description = "ML training playground — pre-training and reinforcement learning exercises"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "datasets>=3.0",
+    "pyyaml>=6.0",
+    "mm-tokenizers",
+    "mm-model",
+    "mm-training",
+    "mm-wordle",
+]
+
+[tool.uv.sources]
+mm-tokenizers = { workspace = true }
+mm-model = { workspace = true }
+mm-training = { workspace = true }
+mm-wordle = { workspace = true }
 
 [tool.uv.workspace]
 members = [
