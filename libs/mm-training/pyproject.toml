@@ -1,0 +1,16 @@
+[project]
+name = "mm-training"
+version = "0.1.0"
+description = "Training loop utilities, checkpointing, metrics logging"
+requires-python = ">=3.12"
+dependencies = [
+    "torch>=2.4",
+    "tensorboard>=2.18",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mm_training"]

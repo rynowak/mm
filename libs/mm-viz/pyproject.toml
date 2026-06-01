@@ -1,0 +1,15 @@
+[project]
+name = "mm-viz"
+version = "0.1.0"
+description = "Training visualizations: game replays, attention heatmaps, GRPO step inspector"
+requires-python = ">=3.12"
+dependencies = [
+    "plotly>=6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mm_viz"]
