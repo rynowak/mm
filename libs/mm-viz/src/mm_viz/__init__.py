@@ -14,12 +14,14 @@ from mm_viz.grpo_inspector import (
     render_grpo_trajectory_html,
 )
 from mm_viz.replay_viewer import render_checkpoint_comparison, render_progress_report
+from mm_viz.strategy import analyze_strategy, render_strategy_html
 
 __all__ = [
     "CompletionData",
     "EvalSnapshot",
     "GRPOStepData",
     "GameReplay",
+    "analyze_strategy",
     "extract_attention_weights",
     "render_attention_html",
     "render_checkpoint_comparison",
@@ -31,5 +33,6 @@ __all__ = [
     "render_grpo_trajectory_from_dir",
     "render_grpo_trajectory_html",
     "render_progress_report",
+    "render_strategy_html",
     "render_wordle_attention_html",
 ]
