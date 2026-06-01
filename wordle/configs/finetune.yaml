@@ -1,0 +1,35 @@
+model:
+  checkpoint: null  # path to pre-trained checkpoint (required at runtime)
+
+rl:
+  algorithm: "grpo"  # "reinforce" or "grpo"
+  decoding: "constrained"  # "constrained" or "unconstrained"
+  seed: 42
+  learning_rate: 5e-5
+  weight_decay: 0.01
+  warmup_steps: 50
+  max_steps: 2000
+  grad_clip: 1.0
+  eval_interval: 100
+  checkpoint_interval: 500
+
+  # GRPO-specific
+  group_size: 8
+  clip_epsilon: 0.2
+  kl_beta: 0.04
+
+  # REINFORCE-specific
+  baseline_momentum: 0.99
+
+  # Game settings
+  batch_size: 16  # games per batch
+  max_eval_games: 50  # fixed evaluation set size
+
+reward:
+  invalid_word: -1.0
+  repeated_guess: -0.5
+  contradicts_clues: -0.3
+  green_letter: 0.2
+  yellow_letter: 0.1
+  solved: 1.0
+  failed: -0.5
