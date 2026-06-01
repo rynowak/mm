@@ -1,0 +1,189 @@
+revision: v0.4.0
+installed_at: '2026-06-01T21:26:22.574010+00:00'
+packages:
+  agents-md:
+    skills:
+      agents-md:
+        files:
+          .agents/skills/agents-md/SKILL.md:
+            sha256: 5c15c36ffee172b1cbb5a3c233c85c05f44c71284dffa4bfc24d7d40c9745b4c
+          .agents/skills/agents-md/references/authoring-guide.md:
+            sha256: cc6ccca1ec5f8bba05ab45a5fe8d2902ba73bf2041e0918ea7f75b8571f2ad7f
+          .agents/skills/agents-md/references/calibration.md:
+            sha256: a95f8a10fc9b3647309fcfb602337756955d7ad5fe799f5466a03899befdae69
+          .agents/skills/agents-md/references/rubric.md:
+            sha256: e05f91059d7f48c8813fc984450953fcaabadb99e9adbf5b99d31864dede3f1b
+          .agents/skills/agents-md/references/reasoning-techniques.md:
+            sha256: 4c85e2f6c88ae4e6a2c028e983394b02eb31cd8fad657e86e60326c063165b0d
+  code-review:
+    skills:
+      code-review:
+        files:
+          .agents/skills/code-review/SKILL.md:
+            sha256: 539e271e103f28b4b3d6f6bad04f3e788bbb5019a6b26cc2792fd3273824fa5d
+  doc-cleanup:
+    skills:
+      doc-cleanup:
+        files:
+          .agents/skills/doc-cleanup/SKILL.md:
+            sha256: 7bbfa0895f589d05f5ba93066c786ae9dd6d0987178fc50857c8c574dceded97
+  investigate-ci:
+    skills:
+      investigate-ci:
+        files:
+          .agents/skills/investigate-ci/SKILL.md:
+            sha256: 975b1647605e55329c2ab528a36217cbdc786463a4d72ec681413d071d1c6e7a
+        variant: github-actions
+  playwright:
+    skills:
+      playwright:
+        files:
+          .agents/skills/playwright/SKILL.md:
+            sha256: 183919ea85a788c47948f9e238a18d0816ff1e2cb50ede8c7521d93e1e581761
+  simplify-code:
+    skills:
+      simplify-code:
+        files:
+          .agents/skills/simplify-code/SKILL.md:
+            sha256: 323e4a02f3e1bfe932f248eb69cd4433fb465253b579e6294920b5a7fbc55b99
+  skill:
+    skills:
+      skill:
+        files:
+          .agents/skills/skill/SKILL.md:
+            sha256: cff237016ceca2e9904c8992100f514a33451aaed7067bbf285f6407fbd807d3
+          .agents/skills/skill/references/best-practices.md:
+            sha256: b609c29df3d9290e53b57f239c8f4477d945d737a1c01a3e28b8818e3873e27b
+          .agents/skills/skill/references/specification.md:
+            sha256: 18abc23183f5c887a157dea126b47b12830f3f6b3af879d035b892e56bacc3fe
+          .agents/skills/skill/references/templates.md:
+            sha256: 76ce90738925536db6a589bfc0b89bebe332ed2d3f110418103582389b4848e5
+          .agents/skills/skill/references/calibration.md:
+            sha256: a95f8a10fc9b3647309fcfb602337756955d7ad5fe799f5466a03899befdae69
+          .agents/skills/skill/references/reasoning-techniques.md:
+            sha256: 4c85e2f6c88ae4e6a2c028e983394b02eb31cd8fad657e86e60326c063165b0d
+  telemetry:
+    skills:
+      add-telemetry:
+        files:
+          .agents/skills/add-telemetry/SKILL.md:
+            sha256: 7bf981b33122f3dcb2fe199d9adcb61438aaaf5313319e728293846200af5171
+      query-telemetry:
+        files:
+          .agents/skills/query-telemetry/SKILL.md:
+            sha256: 559d6e70f6a66f56f85a80313d89bb60c56cbf5bf98ea489a3390583915128af
+  test:
+    skills:
+      test-engineer:
+        files:
+          .agents/skills/test-engineer/SKILL.md:
+            sha256: e527907817ba17036114de01d0e2b21d3bb6eae31fded952830f269edb5f6271
+      test-integration-audit:
+        files:
+          .agents/skills/test-integration-audit/SKILL.md:
+            sha256: 54f45f127a84ba982dccec26d97fd05b0103ecb499b69b69a5291b66be3065bf
+      test-integration-engineer:
+        files:
+          .agents/skills/test-integration-engineer/SKILL.md:
+            sha256: fc992c1bd714cc06ef0d9e04ed919ba8696c89edcf0c4e4b546011bc6c346860
+      test-optimize:
+        files:
+          .agents/skills/test-optimize/SKILL.md:
+            sha256: 424b7edf4c5f20882910da69cab5667f09c21f83e93e593cd175fe30f582405a
+  thinking:
+    skills:
+      think-adversarial-patterns:
+        files:
+          .agents/skills/think-adversarial-patterns/SKILL.md:
+            sha256: bd43337b2f546db72db594a2e5db6a85111fa7d7bed480e3a3373b2c4f082341
+      think-algo-reasoning:
+        files:
+          .agents/skills/think-algo-reasoning/SKILL.md:
+            sha256: edeb6c44887b6297bc1385a2947b6f24fdd85e05bbede878f4410dfc6fc9194a
+      think-commitment-variant:
+        files:
+          .agents/skills/think-commitment-variant/SKILL.md:
+            sha256: 26ecb652b0bb55851d882b2ed353b1ae7fb9d1836246de3700e7be33bfa43688
+      think-data-journey:
+        files:
+          .agents/skills/think-data-journey/SKILL.md:
+            sha256: 01f8ddbfba597c9e7ff1a27b41f3c30790fb57346eb3ee8881c6ec61fc3694ca
+      think-deep-reasoning:
+        files:
+          .agents/skills/think-deep-reasoning/SKILL.md:
+            sha256: 9e393ad061918486aeaee22e697f75b06e1845f374eea988ea15ea3676489d94
+      think-expectation:
+        files:
+          .agents/skills/think-expectation/SKILL.md:
+            sha256: 77cab6ed64e709e6ef7917ccd0206b69a033eb53b3fdb63720672f87914a83ff
+      think-flow-tracing:
+        files:
+          .agents/skills/think-flow-tracing/SKILL.md:
+            sha256: c3c2384c9857d9bf7db6b0904ff7aadaedecd040f404deaeb2004c9c776c8f34
+      think-fmea-design-review:
+        files:
+          .agents/skills/think-fmea-design-review/SKILL.md:
+            sha256: 2b5d93cbeb75fd55602e3848b6006e4deab7759892476e8ae85902e3b4f8fba0
+      think-full-focus:
+        files:
+          .agents/skills/think-full-focus/SKILL.md:
+            sha256: 8a5ea250b559e8f2031bffc9ff501ddf86e53cbcdcc8db4837aa57243a8574f3
+      think-priv-verification:
+        files:
+          .agents/skills/think-priv-verification/SKILL.md:
+            sha256: 2d58b0af417c362dc42a5ee168a9957ef74914f818380b901cc8e635d17c2cc8
+      think-privacy-adversarial:
+        files:
+          .agents/skills/think-privacy-adversarial/SKILL.md:
+            sha256: 91330061b9ae163dccf748ebae17ec82b2e7ab9f7acf88d70ead39f3370d8a21
+      think-role-boundary:
+        files:
+          .agents/skills/think-role-boundary/SKILL.md:
+            sha256: 0a531c574b6de840d0b034ca9ab884d273ca7d9bc1b9dfd214e5f833fd98fa69
+      think-variant-analysis:
+        files:
+          .agents/skills/think-variant-analysis/SKILL.md:
+            sha256: 8c27eac803ec521eb27e98af709901313d1a5db395ecefeae00e5f3ba3f87cb3
+      think-verification:
+        files:
+          .agents/skills/think-verification/SKILL.md:
+            sha256: df4d5377c939089e621d4cfc0ec53fd86e11aa00722fe4908d07061a0c2949a9
+  workflow:
+    skills:
+      adversarial-investigation:
+        files:
+          .agents/skills/adversarial-investigation/SKILL.md:
+            sha256: ea8d8d8c650d7a30e96db6e775ada5c4dff3a55ddaa663efe205d74ce560c665
+      architect-and-design:
+        files:
+          .agents/skills/architect-and-design/SKILL.md:
+            sha256: d2109eba6f01dd96ac2969112e1d814d3ebc6b3649a0dd84e0b28e5338d8757a
+      feature-engineer:
+        files:
+          .agents/skills/feature-engineer/SKILL.md:
+            sha256: 027d086013911301c2d416348611e7e6f47ef7f3908d83f407accb37da9ccf9b
+      fix-issue:
+        files:
+          .agents/skills/fix-issue/SKILL.md:
+            sha256: 366e2b5de8bafd0451b056a51d15795d26827a52462b4e3fe09e0c22f5031512
+      local-dev:
+        files:
+          .agents/skills/local-dev/SKILL.md:
+            sha256: e1a8fe51cdffb93098e34f34537b194c7dda8402e2674b6d2edc218647389b71
+      patrol:
+        files:
+          .agents/skills/patrol/SKILL.md:
+            sha256: 555abd4bc37fe93d031803a297170ae782d4afed5cfa65830ddb3f8a86997ca3
+      prepare-pr:
+        files:
+          .agents/skills/prepare-pr/SKILL.md:
+            sha256: 1538e59d98e540f990a660d6bc8c794f8497b0201ec711ccf1b59000970e87a5
+      review-feedback:
+        files:
+          .agents/skills/review-feedback/SKILL.md:
+            sha256: d998470966e68919a98c9d95a17359a9dbcbbaf9670e8f19a7475bc4b7558c00
+      ship-it:
+        files:
+          .agents/skills/ship-it/SKILL.md:
+            sha256: 1740b5b60fd5f99f8ee2eb6b3a09b4e15c0d344c3298cf2fff7d4b8a345a4b32
+        variant: github
