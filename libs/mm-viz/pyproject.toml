@@ -5,7 +5,12 @@ description = "Training visualizations: game replays, attention heatmaps, GRPO s
 requires-python = ">=3.12"
 dependencies = [
     "plotly>=6.0",
+    "torch>=2.4",
+    "mm-model",
 ]
+
+[tool.uv.sources]
+mm-model = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
