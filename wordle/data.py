@@ -68,7 +68,7 @@ def _tokenize_tinystories(
                 filtered.append("[newline]")
             elif ch == " ":
                 filtered.append("[sep]")
-            elif ch.isalpha() and ch.islower():
+            elif "a" <= ch <= "z":
                 filtered.append(ch)
             # Skip characters not in our vocabulary (punctuation, digits, etc.)
 
