@@ -125,7 +125,7 @@ def score_valid_words(
     game_state_ids: Tensor,
     valid_word_ids_list: list[Tensor],
     device: torch.device,
-    chunk_size: int = 1000,
+    chunk_size: int = 4000,
 ) -> Tensor:
     """Score each valid word by computing sum of log probs of its characters.
 
@@ -193,23 +193,14 @@ def sample_constrained(
     """Sample word(s) from the constrained distribution over valid words.
 
     Scores all valid words, applies softmax to get a distribution, and samples.
-
-    Args:
-        model: The GPT model.
-        game_state_ids: (prompt_len,) token IDs for current game state.
-        valid_word_ids_list: list of (5,) tensors, one per valid word.
-        valid_words_list: list of word strings, aligned with valid_word_ids_list.
-        device: Device to run on.
-        n_samples: Number of words to sample.
-        temperature: Sampling temperature.
-
-    Returns:
-        List of (word, word_token_ids) tuples.
     """
     was_training = model.training
     model.eval()
 
-    scores = score_valid_words(model, game_state_ids, valid_word_ids_list, device)  # (num_words,)
+    cur_words = valid_words_list
+    cur_ids = valid_word_ids_list
+
+    scores = score_valid_words(model, game_state_ids, cur_ids, device)
 
     # Apply temperature and softmax to get sampling distribution
     probs = F.softmax(scores / temperature, dim=-1)  # (num_words,)
@@ -219,8 +210,8 @@ def sample_constrained(
 
     results: list[tuple[str, Tensor]] = []
     for idx in indices:
-        word = valid_words_list[idx.item()]
-        word_ids = valid_word_ids_list[idx.item()]
+        word = cur_words[idx.item()]
+        word_ids = cur_ids[idx.item()]
         results.append((word, word_ids))
 
     if was_training:
@@ -439,6 +430,7 @@ def play_game_grpo(
                 valid_words_list,
                 device,
                 n_samples=group_size,
+
             )
         else:
             samples = sample_unconstrained(model, state_ids, device, tokenizer, n_samples=group_size)
@@ -676,6 +668,7 @@ def evaluate_games(
                     valid_word_ids_list,
                     valid_words_list,
                     device,
+    
                 )
             else:
                 samples = sample_unconstrained(model, state_ids, device, tokenizer)
