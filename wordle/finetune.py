@@ -17,7 +17,7 @@ from collections import deque
 
 import torch
 import torch.nn.functional as F
-import yaml
+from config import FinetuneConfig
 from mm_grpo import (
     MovingAverageBaseline,
     build_step_data,
@@ -101,17 +101,17 @@ def create_reference_model(model: GPT) -> GPT:
 # ---------------------------------------------------------------------------
 
 
-def build_reward_config(config: dict) -> RewardConfig:
-    """Build a RewardConfig from the YAML config."""
-    rc = config.get("reward", {})
+def build_reward_config(config: FinetuneConfig) -> RewardConfig:
+    """Build a RewardConfig from the parsed config."""
+    rc = config.reward
     return RewardConfig(
-        invalid_word=rc.get("invalid_word", -1.0),
-        repeated_guess=rc.get("repeated_guess", -0.5),
-        contradicts_clues=rc.get("contradicts_clues", -0.3),
-        green_letter=rc.get("green_letter", 0.2),
-        yellow_letter=rc.get("yellow_letter", 0.1),
-        solved=rc.get("solved", 1.0),
-        failed=rc.get("failed", -0.5),
+        invalid_word=rc.invalid_word,
+        repeated_guess=rc.repeated_guess,
+        contradicts_clues=rc.contradicts_clues,
+        green_letter=rc.green_letter,
+        yellow_letter=rc.yellow_letter,
+        solved=rc.solved,
+        failed=rc.failed,
     )
 
 
@@ -737,10 +737,10 @@ def precompute_valid_word_ids(tokenizer: CharTokenizer, device: torch.device) ->
 # ---------------------------------------------------------------------------
 
 
-def train(config: dict, checkpoint_path: str) -> None:
+def train(config: FinetuneConfig, checkpoint_path: str) -> None:
     """Run the RL fine-tuning loop."""
-    rl_cfg = config["rl"]
-    seed = rl_cfg["seed"]
+    rl_cfg = config.rl
+    seed = rl_cfg.seed
     seed_everything(seed)
     device = get_device()
     print(f"Device: {device}")
@@ -759,20 +759,20 @@ def train(config: dict, checkpoint_path: str) -> None:
     print("Created frozen reference model")
 
     # Algorithm and decoding mode
-    algorithm = rl_cfg["algorithm"]
-    constrained = rl_cfg["decoding"] == "constrained"
-    print(f"Algorithm: {algorithm}, Decoding: {rl_cfg['decoding']}")
+    algorithm = rl_cfg.algorithm
+    constrained = rl_cfg.decoding == "constrained"
+    print(f"Algorithm: {algorithm}, Decoding: {rl_cfg.decoding}")
 
     # Optimizer and scheduler
     optimizer = create_optimizer(
         model,
-        lr=rl_cfg["learning_rate"],
-        weight_decay=rl_cfg["weight_decay"],
+        lr=rl_cfg.learning_rate,
+        weight_decay=rl_cfg.weight_decay,
     )
     scheduler = create_scheduler(
         optimizer,
-        warmup_steps=rl_cfg["warmup_steps"],
-        total_steps=rl_cfg["max_steps"],
+        warmup_steps=rl_cfg.warmup_steps,
+        total_steps=rl_cfg.max_steps,
     )
 
     # Reward config
@@ -789,7 +789,7 @@ def train(config: dict, checkpoint_path: str) -> None:
     print(f"  {len(valid_words_list)} valid words ready")
 
     # Fixed evaluation set
-    max_eval_games = rl_cfg["max_eval_games"]
+    max_eval_games = rl_cfg.max_eval_games
     eval_words = random.sample(answers, min(max_eval_games, len(answers)))
     print(f"Fixed evaluation set: {len(eval_words)} words")
 
@@ -804,22 +804,22 @@ def train(config: dict, checkpoint_path: str) -> None:
     # Run manifest
     manifest = RunManifest.capture(
         experiment=f"finetune-{algorithm}",
-        config=config,
+        config=config.model_dump(),
         seed=seed,
         dataset_id="wordle-answers",
     )
     manifest.save(logger.log_dir / "manifest.json")
 
     # Training state
-    max_steps = rl_cfg["max_steps"]
-    batch_size = rl_cfg["batch_size"]
-    grad_clip = rl_cfg["grad_clip"]
-    eval_interval = rl_cfg["eval_interval"]
-    checkpoint_interval = rl_cfg["checkpoint_interval"]
-    group_size = rl_cfg.get("group_size", 8)
-    clip_epsilon = rl_cfg.get("clip_epsilon", 0.2)
-    kl_beta = rl_cfg.get("kl_beta", 0.04)
-    baseline_momentum = rl_cfg.get("baseline_momentum", 0.99)
+    max_steps = rl_cfg.max_steps
+    batch_size = rl_cfg.batch_size
+    grad_clip = rl_cfg.grad_clip
+    eval_interval = rl_cfg.eval_interval
+    checkpoint_interval = rl_cfg.checkpoint_interval
+    group_size = rl_cfg.group_size
+    clip_epsilon = rl_cfg.clip_epsilon
+    kl_beta = rl_cfg.kl_beta
+    baseline_momentum = rl_cfg.baseline_momentum
 
     # Rolling metrics
     recent_wins: deque[bool] = deque(maxlen=100)
@@ -1131,10 +1131,7 @@ def train(config: dict, checkpoint_path: str) -> None:
 def main() -> None:
     """Entry point."""
     args = parse_args()
-
-    with open(args.config) as f:
-        config = yaml.safe_load(f)
-
+    config = FinetuneConfig.from_yaml(args.config)
     train(config, checkpoint_path=args.checkpoint)
 
 

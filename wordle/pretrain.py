@@ -17,7 +17,7 @@ import time
 
 import numpy as np
 import torch
-import yaml
+from config import PretrainConfig
 from data import load_pretrain_data
 from mm_model import GPT, GPTConfig, load_checkpoint, save_checkpoint
 from mm_tokenizers import CharTokenizer
@@ -52,15 +52,15 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_model(config: dict, tokenizer: CharTokenizer) -> GPT:
+def build_model(config: PretrainConfig, tokenizer: CharTokenizer) -> GPT:
     """Build a GPT model from config."""
     model_cfg = GPTConfig(
-        n_layers=config["model"]["n_layers"],
-        n_heads=config["model"]["n_heads"],
-        embed_dim=config["model"]["embed_dim"],
+        n_layers=config.model.n_layers,
+        n_heads=config.model.n_heads,
+        embed_dim=config.model.embed_dim,
         vocab_size=tokenizer.vocab_size,
-        context_len=config["model"]["context_len"],
-        dropout=config["model"]["dropout"],
+        context_len=config.model.context_len,
+        dropout=config.model.dropout,
     )
     model = GPT(model_cfg)
     param_count = sum(p.numel() for p in model.parameters())
@@ -138,10 +138,10 @@ def compute_valid_word_rate(
     return n_valid / n_samples
 
 
-def train(config: dict, resume_path: str | None = None) -> None:
+def train(config: PretrainConfig, resume_path: str | None = None) -> None:
     """Run the pre-training loop."""
     # Setup
-    seed = config["training"]["seed"]
+    seed = config.training.seed
     seed_everything(seed)
     device = get_device()
     print(f"Device: {device}")
@@ -153,13 +153,13 @@ def train(config: dict, resume_path: str | None = None) -> None:
     # Optimizer and scheduler
     optimizer = create_optimizer(
         model,
-        lr=config["training"]["learning_rate"],
-        weight_decay=config["training"]["weight_decay"],
+        lr=config.training.learning_rate,
+        weight_decay=config.training.weight_decay,
     )
     scheduler = create_scheduler(
         optimizer,
-        warmup_steps=config["training"]["warmup_steps"],
-        total_steps=config["training"]["max_steps"],
+        warmup_steps=config.training.warmup_steps,
+        total_steps=config.training.max_steps,
     )
 
     # Resume from checkpoint
@@ -187,22 +187,22 @@ def train(config: dict, resume_path: str | None = None) -> None:
         print(f"Resumed at step {start_step}")
 
     # Load data
-    train_dataset, val_dataset = load_pretrain_data(config, tokenizer)
+    train_dataset, val_dataset = load_pretrain_data(config.model_dump(), tokenizer)
     train_loader = DataLoader(
         train_dataset,
-        batch_size=config["training"]["batch_size"],
+        batch_size=config.training.batch_size,
         shuffle=True,
         drop_last=True,
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=config["training"]["batch_size"],
+        batch_size=config.training.batch_size,
         shuffle=False,
         drop_last=True,
     )
 
     # Determine model size label from config
-    embed_dim = config["model"]["embed_dim"]
+    embed_dim = config.model.embed_dim
     size_label = "small" if embed_dim <= 256 else "medium"
 
     # Metrics logger
@@ -212,19 +212,19 @@ def train(config: dict, resume_path: str | None = None) -> None:
     # Run manifest
     manifest = RunManifest.capture(
         experiment=f"pretrain-{size_label}",
-        config=config,
+        config=config.model_dump(),
         seed=seed,
-        dataset_id=config["data"]["dataset"],
+        dataset_id=config.data.dataset,
     )
     manifest.save(logger.log_dir / "manifest.json")
 
     # Training loop
-    max_steps = config["training"]["max_steps"]
-    grad_clip = config["training"]["grad_clip"]
-    eval_interval = config["training"]["eval_interval"]
-    checkpoint_interval = config["training"]["checkpoint_interval"]
-    block_size = config["model"]["context_len"]
-    batch_size = config["training"]["batch_size"]
+    max_steps = config.training.max_steps
+    grad_clip = config.training.grad_clip
+    eval_interval = config.training.eval_interval
+    checkpoint_interval = config.training.checkpoint_interval
+    block_size = config.model.context_len
+    batch_size = config.training.batch_size
 
     model.train()
     step = start_step
@@ -340,10 +340,7 @@ def train(config: dict, resume_path: str | None = None) -> None:
 def main() -> None:
     """Entry point."""
     args = parse_args()
-
-    with open(args.config) as f:
-        config = yaml.safe_load(f)
-
+    config = PretrainConfig.from_yaml(args.config)
     train(config, resume_path=args.resume)
 
 
