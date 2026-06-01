@@ -9,14 +9,18 @@ dependencies = [
     "mm-tokenizers",
     "mm-model",
     "mm-training",
+    "mm-grpo",
     "mm-wordle",
+    "mm-viz",
 ]
 
 [tool.uv.sources]
 mm-tokenizers = { workspace = true }
 mm-model = { workspace = true }
 mm-training = { workspace = true }
+mm-grpo = { workspace = true }
 mm-wordle = { workspace = true }
+mm-viz = { workspace = true }
 
 [tool.uv.workspace]
 members = [
