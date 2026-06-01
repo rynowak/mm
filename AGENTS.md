@@ -61,6 +61,7 @@ ML training playground for pre-training and reinforcement learning. Sample/refer
 - Format with `ruff format`, lint with `ruff check`.
 - Training scripts must be reproducible: seed all RNGs, log hyperparameters.
 - Each sample/exercise lives in its own top-level directory with its own README.
+- Extract reusable pieces into library packages — building the abstractions is part of learning.
 
 ## Prerequisites
 
