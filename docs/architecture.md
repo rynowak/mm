@@ -19,7 +19,7 @@ Decoder-only GPT-style transformer. Two size configs, both character-level:
 
 | Config | Layers | Heads | Embed Dim | Context | Params | Train Time (MPS) |
 |--------|--------|-------|-----------|---------|--------|-------------------|
-| small  | 6      | 6     | 256       | 256     | ~5M    | ~10-30 min        |
+| small  | 6      | 8     | 256       | 256     | ~5M    | ~10-30 min        |
 | medium | 6      | 6     | 384       | 256     | ~10M   | ~1-3 hrs          |
 
 Start with `small` for fast iteration. Scale to `medium` if the model needs more capacity for Wordle. Whether 5M params is sufficient for Wordle is an open question — no one has published results at this scale. Finding out is part of the exercise.
@@ -326,7 +326,7 @@ mm/
 │   ├── finetune.py             # GRPO RL fine-tuning script
 │   ├── evaluate.py             # evaluation and demo script
 │   └── configs/
-│       ├── small.yaml           # ~5M param config (6L/6H/256d)
+│       ├── small.yaml           # ~5M param config (6L/8H/256d)
 │       └── medium.yaml          # ~10M param config (6L/6H/384d)
 └── .agents/
     └── ...
