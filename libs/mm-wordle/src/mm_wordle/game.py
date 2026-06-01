@@ -85,6 +85,8 @@ class WordleEnv:
         1. Greens are assigned first (exact position matches).
         2. Yellows are assigned left-to-right for remaining unmatched target letters.
         """
+        if len(guess) != len(target):
+            return [LetterFeedback.GRAY] * len(target)
         n = len(guess)
         feedback = [LetterFeedback.GRAY] * n
 

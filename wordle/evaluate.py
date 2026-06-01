@@ -69,9 +69,13 @@ def generate_guess(
     output = model.generate(prompt, max_new_tokens=5, temperature=0.1, top_k=5)
     generated_ids = output[0, len(state_ids) :].tolist()
     try:
-        return tokenizer.decode(generated_ids)
+        text = tokenizer.decode(generated_ids)
     except ValueError:
-        return "?????"
+        text = ""
+    # Keep only lowercase letters and pad/truncate to exactly 5
+    letters = [ch for ch in text if "a" <= ch <= "z"]
+    word = "".join(letters[:5]).ljust(5, "a")
+    return word
 
 
 def select_guess(
