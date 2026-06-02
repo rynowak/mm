@@ -137,11 +137,16 @@ These are starting values — expect to tune them during training. Reward functi
 
 Two approaches to generating guesses, explored as a learning exercise:
 
-**Constrained decoding (start here).** The model scores all valid words from the word list and samples from that distribution. The final hidden state of the game-state sequence is projected through the LM head, and we compute a score for each valid word by summing the log-probabilities of its characters. This guarantees every guess is a real word, letting RL focus on strategy. This is the simpler problem and the right starting point.
+**Trie-constrained decoding.** At each of the 5 character positions, the model's logits are masked using a prefix trie built from the answer word list (~2,315 words). Only characters that continue a valid word are allowed. This guarantees every guess is a valid word with just 5 forward passes, regardless of vocabulary size.
 
-**Unconstrained decoding (harder mode).** The model generates guesses character-by-character autoregressively. Most outputs will not be valid words, especially early in training. This forces the model to learn spelling and word structure through RL, which is much harder but teaches more about how RL shapes generation. Curriculum learning is essential here — start with mid-game states (3-4 guesses already made) and small word lists, then expand.
+The trie mask is applied consistently in all contexts:
+- **Sampling:** generating candidate guesses during GRPO
+- **Old policy log probs:** computed at sampling time, frozen during optimization
+- **Current policy log probs:** recomputed each PPO epoch
+- **Reference policy log probs:** from the frozen reference model
+- **Evaluation:** greedy trie-constrained decoding
 
-Comparing the two modes is one of the most interesting experiments in the exercise.
+This consistency ensures the GRPO importance sampling ratio is computed over the same constrained distribution everywhere. See `docs/game-format.md` for the full specification.
 
 ### REINFORCE Baseline
 
@@ -156,17 +161,12 @@ Before implementing GRPO, implement REINFORCE with baseline (~50 lines of PyTorc
 1. Load pre-trained model as both the **active policy** and the **reference policy** (frozen copy).
 2. For each training step:
    a. Sample a batch of Wordle games (random target words).
-   b. For each game, play up to 6 turns. At each turn, the model sees the game state (prior guesses + feedback) and generates a group of candidate guesses (constrained or unconstrained).
+   b. For each game, play up to 6 turns. At each turn, the model sees the game state (prior guesses + feedback) and generates a group of candidate guesses via trie-constrained decoding.
    c. Score each candidate with the reward function.
    d. Compute GRPO loss and update the active policy.
 3. Log: win rate, average guesses to solve, reward distribution, KL divergence from reference.
 
-### Curriculum Learning (unconstrained mode)
-
-When using unconstrained decoding, train in stages:
-
-1. **Stage 1:** Start from mid-game states (3-4 guesses already made, most letters revealed). Small answer set (~100 words). Model only needs to make 1-2 good guesses.
-2. **Stage 2:** Earlier game states (1-2 guesses made). Expand to ~500 words.
+### Curriculum Learning (future)
 3. **Stage 3:** Full games from Turn 1. Full word list.
 
 This progression is critical — prior art shows even 4B-parameter models fail without curriculum learning.

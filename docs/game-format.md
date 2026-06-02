@@ -72,6 +72,21 @@ During RL, the model sees a partial game state and generates 5 characters for th
 [bos] s l a t e [gray] [gray] [green] [gray] [green] [sep] p r o n e [gray] [green] [gray] [green] [green] [sep]
 ```
 
+## Decoding
+
+All phases use **trie-constrained decoding**. At each character position, the model's logits are masked to only allow characters that continue a valid word in the trie. This guarantees every guess is a valid word while preserving the model's character-level preferences.
+
+The trie is built from the answer word list (~2,315 words).
+
+| Phase | Decoding | Trie |
+|-------|----------|------|
+| Pre-training | N/A (next-token prediction on transcripts) | N/A |
+| RL training (GRPO) | Trie-constrained sampling | Answer words |
+| RL evaluation | Trie-constrained greedy | Answer words |
+| GRPO log prob computation | Trie-masked logits | Answer words |
+
+The trie mask is applied consistently everywhere log probabilities are computed: sampling, old policy, current policy, and reference policy. This ensures the GRPO importance sampling ratio is computed over the same distribution.
+
 ## Format Consistency
 
 The RL prompt is identical to the pre-training prompt. No format mismatch between phases.
