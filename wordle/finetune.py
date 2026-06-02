@@ -1006,6 +1006,8 @@ def train(
                 # Phase 2: play opening turns with frozen opener model
                 init_state = None
                 init_candidates = None
+                opener_guesses: list[str] = []
+                opener_feedback: list[list[str]] = []
                 if curriculum_phase == 2 and opener_model is not None:
                     init_state = env.reset(target_word=target)
                     init_candidates = list(answers)
@@ -1019,6 +1021,8 @@ def train(
                         init_state, _ = env.step(init_state, guess)
                         fb = init_state.guesses[-1].feedback
                         init_candidates = filter_candidates(init_candidates, guess, fb)
+                        opener_guesses.append(guess)
+                        opener_feedback.append([f.value for f in fb])
 
                 # Skip if opener already solved the puzzle
                 if init_state is not None and init_state.solved:
@@ -1042,6 +1046,17 @@ def train(
                 )
                 if not experiences:
                     continue
+
+                # Prepend opener turns to replay for full game visibility
+                if opener_guesses:
+                    replay = GameReplay(
+                        target=replay.target,
+                        guesses=opener_guesses + replay.guesses,
+                        feedback=opener_feedback + replay.feedback,
+                        solved=replay.solved,
+                        turns=len(opener_guesses) + replay.turns,
+                    )
+
                 all_experiences.append(experiences)
                 batch_rewards.append(game_reward)
                 batch_replays.append(replay)
