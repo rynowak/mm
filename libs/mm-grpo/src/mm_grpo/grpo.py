@@ -78,8 +78,10 @@ def grpo_loss(
     policy_loss = -surrogate.mean()
 
     # Step 4: KL penalty from reference policy
-    # Single-sample estimate: mean of (log_current - log_ref) over tokens
-    kl_per_token = log_probs - ref_log_probs  # (group_size, seq_len)
+    # Schulman's approximation: (ratio - 1) - log(ratio), always >= 0
+    log_ratio = log_probs - ref_log_probs  # (group_size, seq_len)
+    ratio = torch.exp(log_ratio)
+    kl_per_token = ratio - 1 - log_ratio
     kl_div = kl_per_token.mean()
 
     # Total loss = policy loss + beta * KL penalty
