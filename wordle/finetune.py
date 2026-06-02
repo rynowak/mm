@@ -129,6 +129,24 @@ def build_reward_config(config: FinetuneConfig) -> RewardConfig:
 # ---------------------------------------------------------------------------
 
 
+def _build_trie_mask(
+    trie: WordTrie,
+    prefixes: list[str],
+    tokenizer: CharTokenizer,
+    vocab_size: int,
+    device: torch.device,
+) -> Tensor:
+    """Build a batched logit mask from trie valid next chars for each prefix."""
+    batch_size = len(prefixes)
+    mask = torch.full((batch_size, vocab_size), float("-inf"), device=device)
+    for i, prefix in enumerate(prefixes):
+        for ch in trie.valid_next_chars(prefix):
+            token_ids = tokenizer.encode(ch)
+            if token_ids:
+                mask[i, token_ids[0]] = 0.0
+    return mask
+
+
 def sample_constrained(
     model: GPT,
     game_state_ids: Tensor,
@@ -138,48 +156,41 @@ def sample_constrained(
     n_samples: int = 1,
     temperature: float = 1.0,
 ) -> list[tuple[str, Tensor]]:
-    """Sample word(s) using trie-constrained autoregressive decoding.
+    """Sample word(s) using batched trie-constrained autoregressive decoding.
 
-    At each of the 5 character positions, mask the model's output logits
-    to only allow characters that continue a valid word in the trie.
-    5 forward passes per sample regardless of word list size.
+    All n_samples are generated in parallel: one batched forward pass per
+    character position (5 total), with per-sample trie masking.
     """
     was_training = model.training
     model.eval()
 
-    results: list[tuple[str, Tensor]] = []
-    for _ in range(n_samples):
-        idx = game_state_ids.unsqueeze(0).to(device)  # (1, prompt_len)
-        prefix = ""
+    prompt = game_state_ids.unsqueeze(0).expand(n_samples, -1).to(device)
+    idx = prompt  # (n_samples, prompt_len)
+    prefixes = [""] * n_samples
+    vocab_size = model.config.vocab_size
 
-        for _pos in range(5):
-            logits, _ = model(idx)
-            logits = logits[:, -1, :] / temperature  # (1, vocab_size)
+    for _pos in range(5):
+        logits, _ = model(idx)
+        logits = logits[:, -1, :] / temperature  # (n_samples, vocab_size)
 
-            # Mask to only valid next characters from the trie
-            valid_chars = trie.valid_next_chars(prefix)
-            if not valid_chars:
-                break
+        mask = _build_trie_mask(trie, prefixes, tokenizer, vocab_size, device)
+        logits = logits + mask
 
-            mask = torch.full_like(logits, float("-inf"))
-            for ch in valid_chars:
-                token_ids = tokenizer.encode(ch)
-                if token_ids:
-                    mask[0, token_ids[0]] = 0.0
-            logits = logits + mask
+        probs = F.softmax(logits, dim=-1)
+        next_tokens = torch.multinomial(probs, num_samples=1)  # (n_samples, 1)
+        idx = torch.cat([idx, next_tokens], dim=1)
 
-            probs = F.softmax(logits, dim=-1)
-            next_token = torch.multinomial(probs, num_samples=1)
-            idx = torch.cat([idx, next_token], dim=1)
-
+        for i in range(n_samples):
             try:
-                ch = tokenizer.decode([next_token.item()])
-                prefix += ch
+                ch = tokenizer.decode([next_tokens[i].item()])
+                prefixes[i] += ch
             except ValueError:
-                prefix += "?"
+                prefixes[i] += "?"
 
-        word_ids = idx[0, -5:]
-        word = prefix.ljust(5, "a")[:5]
+    results: list[tuple[str, Tensor]] = []
+    for i in range(n_samples):
+        word_ids = idx[i, -5:]
+        word = prefixes[i].ljust(5, "a")[:5]
         results.append((word, word_ids))
 
     if was_training:
