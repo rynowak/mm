@@ -418,10 +418,14 @@ def collect_game_experience(
         with torch.no_grad():
             old_logits, _ = model(full_sequences)
             old_completion_logits = old_logits[:, prompt_len - 1 : prompt_len - 1 + 5, :]
+            if constrained:
+                old_completion_logits = _apply_trie_masks(old_completion_logits, word_ids_batch, trie, tokenizer)
             old_lp = sequence_log_probs(old_completion_logits, word_ids_batch)
 
             ref_logits, _ = ref_model(full_sequences)
             ref_completion_logits = ref_logits[:, prompt_len - 1 : prompt_len - 1 + 5, :]
+            if constrained:
+                ref_completion_logits = _apply_trie_masks(ref_completion_logits, word_ids_batch, trie, tokenizer)
             ref_lp = sequence_log_probs(ref_completion_logits, word_ids_batch)
 
         experiences.append(
@@ -454,11 +458,48 @@ def collect_game_experience(
     return experiences, replay, total_reward
 
 
+def _apply_trie_masks(
+    completion_logits: Tensor,
+    word_ids_batch: Tensor,
+    trie: WordTrie,
+    tokenizer: CharTokenizer,
+) -> Tensor:
+    """Apply trie masks to completion logits so log probs reflect the constrained distribution.
+
+    For each sample and each character position, mask logits to only allow
+    characters that are valid trie continuations given the prefix generated so far.
+    """
+    group_size, seq_len, vocab_size = completion_logits.shape
+    masked = completion_logits.clone()
+
+    for i in range(group_size):
+        prefix = ""
+        for pos in range(seq_len):
+            valid_chars = trie.valid_next_chars(prefix)
+            if valid_chars:
+                mask = torch.full((vocab_size,), float("-inf"), device=completion_logits.device)
+                for ch in valid_chars:
+                    token_ids = tokenizer.encode(ch)
+                    if token_ids:
+                        mask[token_ids[0]] = 0.0
+                masked[i, pos] = masked[i, pos] + mask
+
+            try:
+                ch = tokenizer.decode([word_ids_batch[i, pos].item()])
+                prefix += ch
+            except ValueError:
+                prefix += "?"
+
+    return masked
+
+
 def compute_grpo_loss(
     model: GPT,
     experiences: list[TurnExperience],
     clip_epsilon: float,
     kl_beta: float,
+    trie: WordTrie | None = None,
+    tokenizer: CharTokenizer | None = None,
 ) -> tuple[Tensor, dict[str, float]]:
     """Compute GRPO loss from collected experience.
 
@@ -481,6 +522,8 @@ def compute_grpo_loss(
 
         logits, _ = model(full_sequences)
         completion_logits = logits[:, prompt_len - 1 : prompt_len - 1 + 5, :]
+        if trie is not None and tokenizer is not None:
+            completion_logits = _apply_trie_masks(completion_logits, exp.word_ids_batch, trie, tokenizer)
         current_log_probs = sequence_log_probs(completion_logits, exp.word_ids_batch)
 
         turn_loss, turn_metrics = grpo_loss(
@@ -993,6 +1036,8 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
                         game_experiences,
                         clip_epsilon,
                         kl_beta,
+                        trie=word_trie if constrained else None,
+                        tokenizer=tokenizer if constrained else None,
                     )
                     epoch_loss = epoch_loss + game_loss
                     for key in epoch_metrics:
