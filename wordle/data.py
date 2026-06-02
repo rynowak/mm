@@ -115,42 +115,32 @@ def load_pretrain_data(
 ) -> tuple[TokenBlockDataset, TokenBlockDataset]:
     """Load and prepare pre-training data.
 
-    1. Load TinyStories from HuggingFace datasets
-    2. Load Wordle word lists from mm_wordle
-    3. Character-level tokenize everything
-    4. Concatenate all tokens into one long sequence
-    5. Chunk into fixed-length blocks (context_len + 1 for input/target shift)
-    6. Split into train/val
+    Primary data: Wordle game transcripts and word lists.
+    The model needs to learn the game format, feedback tokens,
+    and a diverse distribution over valid Wordle words.
 
     Returns (train_dataset, val_dataset) as PyTorch Datasets.
     """
     block_size = config["model"]["context_len"]
     val_fraction = config["data"]["val_fraction"]
 
-    print("Tokenizing TinyStories...")
-    story_tokens = _tokenize_tinystories(config, tokenizer)
-    print(f"  TinyStories: {len(story_tokens):,} tokens")
-
     print("Tokenizing word lists...")
     word_tokens = _tokenize_word_lists(config, tokenizer)
     print(f"  Word lists: {len(word_tokens):,} tokens")
 
-    n_games = config["data"].get("transcript_games", 5000)
+    n_games = config["data"].get("transcript_games", 20000)
     print(f"Generating {n_games} Wordle game transcripts...")
     transcript_tokens = generate_transcripts(tokenizer, n_games=n_games)
     print(f"  Transcripts: {len(transcript_tokens):,} tokens")
 
-    # Use story tokens for both train and val (split by fraction),
-    # then add word list + transcript tokens only to training data
-    n_val = int(len(story_tokens) * val_fraction)
-    n_train_stories = len(story_tokens) - n_val
+    all_tokens = word_tokens + transcript_tokens
+    n_val = int(len(all_tokens) * val_fraction)
+    n_train = len(all_tokens) - n_val
 
-    train_all = story_tokens[:n_train_stories] + word_tokens + transcript_tokens
-    val_all = story_tokens[n_train_stories:]
-    print(f"  Total train: {len(train_all):,} tokens, val: {len(val_all):,} tokens")
+    train_tokens = torch.tensor(all_tokens[:n_train], dtype=torch.long)
+    val_tokens = torch.tensor(all_tokens[n_train:], dtype=torch.long)
 
-    train_tokens = torch.tensor(train_all, dtype=torch.long)
-    val_tokens = torch.tensor(val_all, dtype=torch.long)
+    print(f"  Total train: {len(train_tokens):,} tokens, val: {len(val_tokens):,} tokens")
 
     train_dataset = TokenBlockDataset(train_tokens, block_size)
     val_dataset = TokenBlockDataset(val_tokens, block_size)
