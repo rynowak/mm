@@ -21,6 +21,13 @@ from mm_tokenizers import CharTokenizer
 from mm_wordle import WordTrie
 
 _CPU = torch.device("cpu")
+_CHAR_TO_ID = {chr(ord("a") + i): i for i in range(26)}
+
+
+def _make_trie(words: list[str]) -> WordTrie:
+    trie = WordTrie.from_words(words)
+    trie.build_gpu_masks(50, _CHAR_TO_ID, _CPU)
+    return trie
 
 
 def _make_tiny_model(device: torch.device = _CPU) -> GPT:
@@ -68,7 +75,7 @@ class TestSampleConstrained:
         model = _make_tiny_model()
         tokenizer = CharTokenizer()
         words = ["crane", "house", "slate"]
-        trie = WordTrie.from_words(words)
+        trie = _make_trie(words)
         game_state_ids = torch.tensor(tokenizer.encode("[bos]"), dtype=torch.long)
 
         results = sample_constrained(model, game_state_ids, trie, tokenizer, _CPU)
@@ -81,7 +88,7 @@ class TestSampleConstrained:
         model = _make_tiny_model()
         tokenizer = CharTokenizer()
         words = ["crane", "house", "slate"]
-        trie = WordTrie.from_words(words)
+        trie = _make_trie(words)
         game_state_ids = torch.tensor(tokenizer.encode("[bos]"), dtype=torch.long)
 
         results = sample_constrained(model, game_state_ids, trie, tokenizer, _CPU, n_samples=5)
@@ -93,7 +100,7 @@ class TestSampleConstrained:
         model = _make_tiny_model()
         model.train()
         tokenizer = CharTokenizer()
-        trie = WordTrie.from_words(["crane"])
+        trie = _make_trie(["crane"])
         game_state_ids = torch.tensor(tokenizer.encode("[bos]"), dtype=torch.long)
 
         sample_constrained(model, game_state_ids, trie, tokenizer, _CPU)
@@ -102,7 +109,7 @@ class TestSampleConstrained:
     def test_generates_5_char_words(self) -> None:
         model = _make_tiny_model()
         tokenizer = CharTokenizer()
-        trie = WordTrie.from_words(["crane", "house", "slate", "about", "train"])
+        trie = _make_trie(["crane", "house", "slate", "about", "train"])
         game_state_ids = torch.tensor(tokenizer.encode("[bos]"), dtype=torch.long)
 
         results = sample_constrained(model, game_state_ids, trie, tokenizer, _CPU, n_samples=10)

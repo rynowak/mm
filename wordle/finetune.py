@@ -108,24 +108,6 @@ def create_reference_model(model: GPT) -> GPT:
 # ---------------------------------------------------------------------------
 
 
-def _build_trie_mask(
-    trie: WordTrie,
-    prefixes: list[str],
-    tokenizer: CharTokenizer,
-    vocab_size: int,
-    device: torch.device,
-) -> Tensor:
-    """Build a batched logit mask from trie valid next chars for each prefix."""
-    batch_size = len(prefixes)
-    mask = torch.full((batch_size, vocab_size), float("-inf"), device=device)
-    for i, prefix in enumerate(prefixes):
-        for ch in trie.valid_next_chars(prefix):
-            token_ids = tokenizer.encode(ch)
-            if token_ids:
-                mask[i, token_ids[0]] = 0.0
-    return mask
-
-
 def sample_constrained(
     model: GPT,
     game_state_ids: Tensor,
@@ -137,54 +119,39 @@ def sample_constrained(
 ) -> list[tuple[str, Tensor]]:
     """Sample word(s) using batched trie-constrained autoregressive decoding.
 
-    All n_samples are generated in parallel: one batched forward pass per
-    character position (5 total), with per-sample trie masking.
+    Uses KV caching and precomputed GPU trie masks for minimal round trips.
     """
     was_training = model.training
     model.eval()
 
     prompt = game_state_ids.unsqueeze(0).expand(n_samples, -1).to(device)
     prefixes = [""] * n_samples
-    vocab_size = model.config.vocab_size
-    all_tokens = [prompt]
+    all_tokens: list[Tensor] = []
 
     # First pass: process full prompt, get KV cache
     logits, _, kv_cache = model(prompt)
     logits = logits[:, -1, :] / temperature
-
-    mask = _build_trie_mask(trie, prefixes, tokenizer, vocab_size, device)
-    logits = logits + mask
+    logits = logits + trie.gpu_mask(prefixes)
     probs = F.softmax(logits, dim=-1)
     next_tokens = torch.multinomial(probs, num_samples=1)
     all_tokens.append(next_tokens)
 
     for i in range(n_samples):
-        try:
-            ch = tokenizer.decode([int(next_tokens[i].item())])
-            prefixes[i] += ch
-        except ValueError:
-            prefixes[i] += "?"
+        prefixes[i] += tokenizer.decode([int(next_tokens[i].item())])
 
-    # Remaining 4 characters: use KV cache, only process 1 new token
-    for _pos in range(4):
-        logits, _, kv_cache = model(next_tokens, kv_cache=kv_cache, start_pos=prompt.size(1) + _pos)
+    # Remaining 4 characters: KV cache + GPU mask lookup
+    for pos in range(4):
+        logits, _, kv_cache = model(next_tokens, kv_cache=kv_cache, start_pos=prompt.size(1) + pos)
         logits = logits[:, -1, :] / temperature
-
-        mask = _build_trie_mask(trie, prefixes, tokenizer, vocab_size, device)
-        logits = logits + mask
-
+        logits = logits + trie.gpu_mask(prefixes)
         probs = F.softmax(logits, dim=-1)
         next_tokens = torch.multinomial(probs, num_samples=1)
         all_tokens.append(next_tokens)
 
         for i in range(n_samples):
-            try:
-                ch = tokenizer.decode([int(next_tokens[i].item())])
-                prefixes[i] += ch
-            except ValueError:
-                prefixes[i] += "?"
+            prefixes[i] += tokenizer.decode([int(next_tokens[i].item())])
 
-    word_tokens = torch.cat(all_tokens[1:], dim=1)  # (n_samples, 5)
+    word_tokens = torch.cat(all_tokens, dim=1)  # (n_samples, 5)
     results: list[tuple[str, Tensor]] = []
     for i in range(n_samples):
         word_ids = word_tokens[i]
@@ -472,31 +439,16 @@ def _apply_trie_masks(
     trie: WordTrie,
     tokenizer: CharTokenizer,
 ) -> Tensor:
-    """Apply trie masks to completion logits so log probs reflect the constrained distribution.
-
-    For each sample and each character position, mask logits to only allow
-    characters that are valid trie continuations given the prefix generated so far.
-    """
-    group_size, seq_len, vocab_size = completion_logits.shape
+    """Apply trie masks to completion logits using precomputed GPU masks."""
+    group_size, seq_len, _vocab_size = completion_logits.shape
     masked = completion_logits.clone()
 
-    for i in range(group_size):
-        prefix = ""
-        for pos in range(seq_len):
-            valid_chars = trie.valid_next_chars(prefix)
-            if valid_chars:
-                mask = torch.full((vocab_size,), float("-inf"), device=completion_logits.device)
-                for ch in valid_chars:
-                    token_ids = tokenizer.encode(ch)
-                    if token_ids:
-                        mask[token_ids[0]] = 0.0
-                masked[i, pos] = masked[i, pos] + mask
-
-            try:
-                ch = tokenizer.decode([int(word_ids_batch[i, pos].item())])
-                prefix += ch
-            except ValueError:
-                prefix += "?"
+    for pos in range(seq_len):
+        prefixes = []
+        for i in range(group_size):
+            prefix = tokenizer.decode(word_ids_batch[i, :pos].tolist()) if pos > 0 else ""
+            prefixes.append(prefix)
+        masked[:, pos] = masked[:, pos] + trie.gpu_mask(prefixes)
 
     return masked
 
@@ -847,6 +799,8 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
     # Build trie for constrained decoding
     print("Building word trie for constrained decoding...")
     word_trie = build_word_trie(rl_cfg.action_space)
+    char_to_id = {chr(ord("a") + i): i for i in range(26)}
+    word_trie.build_gpu_masks(tokenizer.vocab_size, char_to_id, device)
     print(f"  Action space: {rl_cfg.action_space}")
 
     # Precompute expected info gain for turn 1

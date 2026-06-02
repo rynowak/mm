@@ -18,6 +18,7 @@ from mm_wordle import WordleEnv, WordTrie
 _CPU = torch.device("cpu")
 _WORDS = ["crane", "house", "slate", "about", "train"]
 _TRIE = WordTrie.from_words(_WORDS)
+_TRIE.build_gpu_masks(50, {chr(ord("a") + i): i for i in range(26)}, _CPU)
 
 
 def _make_tiny_model(device: torch.device = _CPU) -> GPT:

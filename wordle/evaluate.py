@@ -93,52 +93,21 @@ def generate_guess_constrained(
     state_ids = tokenizer.encode("".join(state_tokens))
     prompt = torch.tensor([state_ids], dtype=torch.long, device=device)
     prefix = ""
-    vocab_size = model.config.vocab_size
 
     logits, _, kv_cache = model(prompt)
     logits = logits[:, -1, :] / 0.1
-
-    valid_chars = trie.valid_next_chars(prefix)
-    if not valid_chars:
-        return "aaaaa"
-
-    mask = torch.full((1, vocab_size), float("-inf"), device=device)
-    for ch in valid_chars:
-        token_ids = tokenizer.encode(ch)
-        if token_ids:
-            mask[0, token_ids[0]] = 0.0
-    logits = logits + mask
+    logits = logits + trie.gpu_mask([prefix])
     probs = F.softmax(logits, dim=-1)
     next_token = probs.argmax(dim=-1, keepdim=True)
-
-    try:
-        ch = tokenizer.decode([int(next_token.item())])
-        prefix += ch
-    except ValueError:
-        prefix += "?"
+    prefix += tokenizer.decode([int(next_token.item())])
 
     for pos in range(4):
         logits, _, kv_cache = model(next_token, kv_cache=kv_cache, start_pos=len(state_ids) + pos)
         logits = logits[:, -1, :] / 0.1
-
-        valid_chars = trie.valid_next_chars(prefix)
-        if not valid_chars:
-            break
-
-        mask = torch.full((1, vocab_size), float("-inf"), device=device)
-        for ch in valid_chars:
-            token_ids = tokenizer.encode(ch)
-            if token_ids:
-                mask[0, token_ids[0]] = 0.0
-        logits = logits + mask
+        logits = logits + trie.gpu_mask([prefix])
         probs = F.softmax(logits, dim=-1)
         next_token = probs.argmax(dim=-1, keepdim=True)
-
-        try:
-            ch = tokenizer.decode([int(next_token.item())])
-            prefix += ch
-        except ValueError:
-            prefix += "?"
+        prefix += tokenizer.decode([int(next_token.item())])
 
     return prefix.ljust(5, "a")[:5]
 
@@ -622,6 +591,8 @@ def main() -> None:
 
     # Build trie for constrained decoding
     trie = WordTrie.from_words(load_answers())
+    char_to_id = {chr(ord("a") + i): i for i in range(26)}
+    trie.build_gpu_masks(50, char_to_id, device)
 
     # --- Comparison mode ---
     if args.compare is not None:
