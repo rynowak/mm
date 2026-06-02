@@ -1,81 +1,65 @@
 # Reward Function Design
 
-The reward for a guess is its information gain relative to the expected information gain, with a special case for solving the puzzle.
+The reward function has two modes, matching the two curriculum phases.
+
+## Phase 1: Expected Information Gain (Deterministic)
 
 ```
-reward = actual_info_gain - expected_info_gain
+reward = expected_info_gain(guess, candidates_before)
 ```
 
-## Inputs
-
-- **guess**: The 5-letter word that was guessed.
-- **feedback**: The green/yellow/gray feedback for this guess.
-- **candidates_before**: The remaining candidate answer words before this guess.
-
-## Actual Information Gain
-
-`candidates_after` is computed by filtering `candidates_before` to only words consistent with the feedback. The actual information gain is:
-
-```
-actual = log2(len(candidates_before) / len(candidates_after))
-```
-
-## Expected Information Gain
-
-For each candidate target in `candidates_before`, compute the feedback pattern that guess would produce. Group candidates by pattern and compute the weighted average info gain:
+The expected info gain is computed by simulating the guess against every candidate in the pool, grouping by feedback pattern, and computing the weighted average:
 
 ```
 expected = Σ (count / N) * log2(N / count)
 ```
 
-where `count` is the number of candidates producing each unique feedback pattern, and `N = len(candidates_before)`.
+This is a deterministic measure of guess quality. It does not depend on the target word. "raise" always scores 5.88, "marry" always scores 4.22, "fuzzy" always scores 2.31.
 
-## Reward
+**Why deterministic:** The old reward (`actual - expected`) depended on the target word. A bad guess could score positive if it got lucky feedback. GRPO reinforced lucky bad guesses as often as it penalized them, so the model didn't learn to avoid them. With deterministic expected info gain, GRPO consistently reinforces high-info words and suppresses low-info words.
 
-```
-reward = actual - expected
-```
+**No solve bonus.** Phase 1 trains turns 1-2 only. Solving on turn 1-2 means guessing the answer, which is not optimal information gathering. A word that happens to be the answer doesn't necessarily split the candidate space well.
 
-- **Positive reward**: the guess performed better than expected.
-- **Zero reward**: the guess performed exactly as expected.
-- **Negative reward**: the guess performed worse than expected.
-
-## Special Case: Solving
-
-When all 5 letters are green, the guess solved the puzzle. This gets a fixed bonus reward regardless of the candidate count.
-
-**Why this is needed:** Information gain cannot distinguish solving from not solving when `candidates_before` is small. With 1 candidate remaining, both a correct guess and an incorrect guess leave `candidates_after = 1` — the candidate list doesn't change either way. Without a solve bonus, the model has no incentive to guess the known answer. It would waste turns guessing random words with zero reward.
-
-The solve bonus is:
+## Phase 2: Expected Information Gain + Solve Bonus
 
 ```
-solved_bonus = log2(N_answers)   # ~11.2 bits for 2315 answers
+reward = expected_info_gain(guess, candidates_before)
+if solved:
+    reward += SOLVED_BONUS  # ~11.2 bits = log2(2315)
 ```
 
-This equals the maximum possible single-turn info gain (guessing correctly from the full list on turn 1), so it scales consistently with the information gain metric.
+Same deterministic base reward as Phase 1. When the model solves the puzzle (all 5 feedback letters green), it gets the solve bonus on top.
 
-## Examples (turn 1, 2315 candidates, target = "crane")
+**Why the solve bonus is needed in Phase 2:** Information gain cannot distinguish solving from not solving when `candidates_before` is small. With 1 candidate remaining, both a correct guess and an incorrect guess leave `candidates_after = 1`. Without the bonus, the model has no incentive to guess the known answer.
 
-| Guess | Actual | Expected | Reward | Why |
-|-------|--------|----------|--------|-----|
-| slate | 6.4 bits | 5.9 bits | +0.5 | Good guess, slightly above average feedback |
-| arose | 6.9 bits | 5.8 bits | +1.2 | Great guess, good feedback |
-| crane | 11.2 bits | 5.7 bits | +5.4 | Solved — maximum info gain |
-| fuzzy | 0.8 bits | 2.3 bits | -1.5 | Bad guess, barely eliminates anything |
+The bonus equals the maximum possible single-turn info gain (~11.2 bits), so it scales consistently with the base reward.
 
-## Examples (late turn, 1 candidate remaining)
+## Expected Info Gain Computation
 
-| Guess | Reward | Why |
-|-------|--------|-----|
-| correct word | +11.2 (bonus) | Solved the puzzle |
-| wrong word | 0.0 | No info gained, no penalty |
+For each candidate target in `candidates_before`, compute the feedback pattern that the guess would produce. Group candidates by pattern. The expected info gain is the weighted average of `log2(N / count)` across all patterns.
+
+| Guess | Expected Info Gain | Why |
+|-------|-------------------|-----|
+| raise | 5.88 bits | High letter diversity, common letters |
+| slate | 5.86 bits | Similar quality to raise |
+| crane | 5.74 bits | Good but slightly less diverse |
+| marry | 4.22 bits | Repeated R wastes a slot |
+| fuzzy | 2.31 bits | Uncommon letters, low coverage |
+
+These values are **precomputed** for the full 2,315-word answer list at startup (~6s one-time cost). Turn 1 reward lookups are instant.
 
 ## Candidate Tracking
 
 `candidates_before` starts as all 2,315 answer words on turn 1. After each turn, it is filtered based on the chosen guess's feedback. The filtered list becomes `candidates_before` for the next turn.
 
-In GRPO, the group of 4 candidates per turn are all scored against the same `candidates_before`. Each gets different feedback (same target, different guess), so each gets a different reward. The best-scoring candidate is played to advance the game.
+In GRPO, the group of candidates per turn are all scored against the same `candidates_before`. Each gets a deterministic expected info gain score. The best-scoring candidate is played to advance the game.
 
-## Performance
+## Summary
 
-Expected info gain is computed by counting feedback patterns, not by filtering per target. This is O(N) where N = len(candidates_before). ~3-6ms per guess on turn 1, faster on later turns with fewer candidates.
+| | Phase 1 | Phase 2 |
+|---|---------|---------|
+| Turns | 1-2 | 3-6 |
+| Base reward | Expected info gain | Expected info gain |
+| Solve bonus | No | Yes (+11.2 bits) |
+| Depends on target | No | Only for solve bonus |
+| Objective | Learn to gather information | Learn to solve the puzzle |
