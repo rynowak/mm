@@ -345,12 +345,17 @@ def collect_game_experience(
     device: torch.device,
     group_size: int,
     constrained: bool,
-) -> tuple[list[TurnExperience], GameReplay, float]:
-    """Play a Wordle game and collect experience for GRPO optimization."""
+) -> tuple[list[TurnExperience], GameReplay, float, list[dict]]:
+    """Play a Wordle game and collect experience for GRPO optimization.
+
+    Returns (experiences, replay, total_reward, turn_details).
+    turn_details is a list of dicts with per-turn reward breakdown for the dashboard.
+    """
     state = env.reset(target_word)
     experiences: list[TurnExperience] = []
     replay_guesses: list[str] = []
     replay_feedback: list[list[str]] = []
+    turn_details: list[dict] = []
     total_reward = 0.0
     candidates = list(answers)
 
@@ -368,11 +373,21 @@ def collect_game_experience(
         word_ids_batch = torch.stack(word_ids_list)
 
         rewards: list[float] = []
+        group_details: list[dict] = []
         for guess in guesses:
             sim_state, _ = env.step(state, guess)
             fb = sim_state.guesses[-1].feedback if sim_state.guesses else []
-            r, _, _ = compute_reward(guess, fb, candidates)
+            r, actual, expected = compute_reward(guess, fb, candidates)
             rewards.append(r)
+            group_details.append(
+                {
+                    "guess": guess,
+                    "reward": round(r, 3),
+                    "actual": round(actual, 3),
+                    "expected": round(expected, 3),
+                    "candidates": len(candidates),
+                }
+            )
         rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=device)
 
         prompt_expanded = state_ids.unsqueeze(0).expand(group_size, -1)
@@ -406,6 +421,14 @@ def collect_game_experience(
         chosen_guess = guesses[best_idx]
         total_reward += rewards[best_idx]
 
+        turn_details.append(
+            {
+                "chosen": chosen_guess,
+                "candidates": len(candidates),
+                "group": group_details,
+            }
+        )
+
         new_state, _done = env.step(state, chosen_guess)
         feedback = new_state.guesses[-1].feedback if new_state.guesses else []
         replay_guesses.append(chosen_guess)
@@ -421,7 +444,7 @@ def collect_game_experience(
         solved=state.solved,
         turns=state.turn,
     )
-    return experiences, replay, total_reward
+    return experiences, replay, total_reward, turn_details
 
 
 def _apply_trie_masks(
@@ -954,8 +977,9 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
             batch_rewards: list[float] = []
 
             batch_replays: list[GameReplay] = []
+            batch_turn_details: list[list[dict]] = []
             for target in batch_targets:
-                experiences, replay, game_reward = collect_game_experience(
+                experiences, replay, game_reward, turn_details = collect_game_experience(
                     model=model,
                     ref_model=ref_model,
                     env=env,
@@ -970,6 +994,7 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
                 all_experiences.append(experiences)
                 batch_rewards.append(game_reward)
                 batch_replays.append(replay)
+                batch_turn_details.append(turn_details)
 
                 recent_wins.append(replay.solved)
                 recent_guesses.append(replay.turns)
@@ -1050,8 +1075,9 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
                         "solved": r.solved,
                         "turns": r.turns,
                         "reward": br,
+                        "turn_details": td,
                     }
-                    for r, br in zip(batch_replays, batch_rewards, strict=True)
+                    for r, br, td in zip(batch_replays, batch_rewards, batch_turn_details, strict=True)
                 ],
             }
             (live_dir / "latest.json").write_text(json.dumps(live_data))

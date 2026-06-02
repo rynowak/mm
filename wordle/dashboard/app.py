@@ -59,6 +59,10 @@ body { font-family: -apple-system, sans-serif; background: #0f0f1a; color: #eee;
 .gc .meta { color: #888; font-size: 11px; margin-top: 4px; }
 .gc .win { color: #6aaa64; font-weight: bold; }
 .gc .loss { color: #c0392b; font-weight: bold; }
+.gc .turns { margin-top: 4px; font-family: monospace; font-size: 10px; }
+.gc .turn-row { padding: 1px 0; }
+.gc .positive { color: #6aaa64; }
+.gc .negative { color: #c0392b; }
 .wr-row { display: flex; align-items: center; gap: 8px;
           font-size: 13px; padding: 2px 0; }
 .wr-label { width: 50px; text-align: right; color: #888; }
@@ -141,10 +145,37 @@ async def frag_live():
         status_cls = "win" if r.solved else "loss"
         status_txt = f"solved in {r.turns}" if r.solved else "failed"
         reward = g.get("reward", 0)
+
         html += f'<div class="gc">{render_game_html(r)}'
         html += f'<p class="meta">{r.target} '
         html += f'<span class="{status_cls}">{status_txt}</span> '
-        html += f"R={reward:+.2f}</p></div>"
+        html += f"R={reward:+.2f}</p>"
+
+        # Per-turn reward breakdown
+        turn_details = g.get("turn_details", [])
+        if turn_details:
+            html += '<div class="turns">'
+            for i, td in enumerate(turn_details):
+                chosen = td["chosen"]
+                cands = td["candidates"]
+                group = td.get("group", [])
+                # Find the chosen guess's details
+                chosen_detail = next((gd for gd in group if gd["guess"] == chosen), None)
+                if chosen_detail:
+                    act = chosen_detail["actual"]
+                    exp = chosen_detail["expected"]
+                    rew = chosen_detail["reward"]
+                    color = "positive" if rew >= 0 else "negative"
+                    html += (
+                        f'<div class="turn-row">'
+                        f"T{i + 1} {cands}w "
+                        f'<span class="{color}">{rew:+.1f}</span> '
+                        f'<span style="color:#666">a={act:.1f} e={exp:.1f}</span>'
+                        f"</div>"
+                    )
+            html += "</div>"
+
+        html += "</div>"
     html += "</div>"
     return HTMLResponse(html)
 
