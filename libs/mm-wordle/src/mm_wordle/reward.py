@@ -86,13 +86,17 @@ def compute_reward(
     candidates_before: list[str],
     solve_bonus: bool = True,
 ) -> tuple[float, float, float]:
-    """Compute reward as actual info gain minus expected info gain.
-
-    Args:
-        solve_bonus: If True, award SOLVED_BONUS when puzzle is solved.
-            Set False for Phase 1 curriculum (pure info gain).
+    """Compute reward for a guess.
 
     Returns (reward, actual_info_gain, expected_info_gain).
+
+    The reward is the expected info gain of the guess — a deterministic
+    measure of guess quality that doesn't depend on the target word.
+    The actual info gain is also returned for logging but is not used
+    as the reward.
+
+    When solve_bonus is True and the puzzle is solved, the reward
+    includes SOLVED_BONUS to incentivize actually guessing the answer.
     """
     n_before = len(candidates_before)
     if n_before <= 1:
@@ -104,9 +108,10 @@ def compute_reward(
     n_after = max(len(candidates_after), 1)
     actual = math.log2(n_before / n_after)
 
-    if solve_bonus and all(f == LetterFeedback.GREEN for f in feedback):
-        actual = max(actual, SOLVED_BONUS)
-
     expected = expected_info_gain(guess, candidates_before)
 
-    return actual - expected, actual, expected
+    reward = expected
+    if solve_bonus and all(f == LetterFeedback.GREEN for f in feedback):
+        reward += SOLVED_BONUS
+
+    return reward, actual, expected

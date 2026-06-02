@@ -28,7 +28,7 @@ class TestComputeReward:
         assert actual > 4.0
         assert expected > 4.0
 
-    def test_bad_guess_negative_reward(self) -> None:
+    def test_bad_guess_low_reward(self) -> None:
         env = WordleEnv()
         answers = load_answers()
         state = env.reset(target_word="crane")
@@ -36,7 +36,7 @@ class TestComputeReward:
         fb = state.guesses[-1].feedback
         reward, actual, expected = compute_reward("fuzzy", fb, list(answers))
         assert actual < 2.0
-        assert reward < 0
+        assert reward < 3.0  # low expected info gain
 
     def test_returns_three_values(self) -> None:
         env = WordleEnv()
@@ -64,14 +64,14 @@ class TestComputeReward:
         reward, actual, expected = compute_reward("slate", fb, ["crane"])
         assert reward == 0.0
 
-    def test_reward_equals_actual_minus_expected(self) -> None:
+    def test_reward_equals_expected_info_gain(self) -> None:
         env = WordleEnv()
         answers = load_answers()
         state = env.reset(target_word="crane")
         state, _ = env.step(state, "arose")
         fb = state.guesses[-1].feedback
         reward, actual, expected = compute_reward("arose", fb, list(answers))
-        assert abs(reward - (actual - expected)) < 1e-10
+        assert abs(reward - expected) < 1e-10
 
 
 class TestExpectedInfoGain:
