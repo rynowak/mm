@@ -63,6 +63,7 @@ class RLConfig(BaseModel):
     group_size: int = 4
     clip_epsilon: float = 0.2
     kl_beta: float = 0.04
+    ppo_epochs: int = 4
     baseline_momentum: float = 0.99
     batch_size: int = 8
     max_eval_games: int = 50

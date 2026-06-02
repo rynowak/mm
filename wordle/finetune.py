@@ -14,6 +14,7 @@ import pathlib
 import random
 import time
 from collections import deque
+from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
@@ -337,7 +338,18 @@ def play_game_reinforce(
     return turn_log_probs, turn_rewards, replay
 
 
-def play_game_grpo(
+@dataclass
+class TurnExperience:
+    """Collected experience from one turn of a GRPO game."""
+
+    state_ids: Tensor
+    word_ids_batch: Tensor
+    rewards_tensor: Tensor
+    ref_log_probs: Tensor
+    old_log_probs: Tensor
+
+
+def collect_game_experience(
     model: GPT,
     ref_model: GPT,
     env: WordleEnv,
@@ -348,129 +360,72 @@ def play_game_grpo(
     trie: WordTrie,
     device: torch.device,
     group_size: int,
-    clip_epsilon: float,
-    kl_beta: float,
     constrained: bool,
-) -> tuple[Tensor, dict[str, float], GameReplay, float]:
-    """Play a Wordle game with GRPO training, collecting loss across turns.
+) -> tuple[list[TurnExperience], GameReplay, float]:
+    """Play a Wordle game and collect experience for GRPO optimization.
 
-    For each turn:
-    1. Generate group_size candidate guesses
-    2. Score each with reward function (by simulating each guess)
-    3. Compute GRPO loss across the group
-    4. Pick the best guess to actually play
-
-    Returns:
-        (total_loss, aggregated_metrics, replay, total_reward)
+    Sampling and reward computation happen here (no gradients needed).
+    Returns the collected experience, replay, and total reward.
     """
     state = env.reset(target_word)
-    total_loss = torch.tensor(0.0, device=device)
-    total_reward = 0.0
-    metrics_accum: dict[str, list[float]] = {
-        "policy_loss": [],
-        "kl_div": [],
-        "entropy": [],
-        "clip_fraction": [],
-    }
+    experiences: list[TurnExperience] = []
     replay_guesses: list[str] = []
     replay_feedback: list[list[str]] = []
-    n_turns = 0
+    total_reward = 0.0
 
     while not state.solved and not state.failed:
-        # Encode game state
         state_tokens = game_state_to_tokens(state)
         state_ids = torch.tensor(tokenizer.encode("".join(state_tokens)), dtype=torch.long, device=device)
 
-        # Generate group_size candidate guesses
         if constrained:
-            samples = sample_constrained(
-                model,
-                state_ids,
-                trie,
-                tokenizer,
-                device,
-                n_samples=group_size,
-
-            )
+            samples = sample_constrained(model, state_ids, trie, tokenizer, device, n_samples=group_size)
         else:
             samples = sample_unconstrained(model, state_ids, device, tokenizer, n_samples=group_size)
 
         guesses = [s[0] for s in samples]
         word_ids_list = [s[1] for s in samples]
-
-        # Stack word IDs: (group_size, 5)
         word_ids_batch = torch.stack(word_ids_list)
 
-        # Score each guess with the reward function by simulating
         rewards: list[float] = []
         for guess in guesses:
             sim_state, _ = env.step(state, guess)
             fb = sim_state.guesses[-1].feedback if sim_state.guesses else []
             r = compute_reward(sim_state, guess, fb, valid_words, reward_config)
             rewards.append(r)
-
         rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=device)
 
-        # Build sequences for scoring
         prompt_expanded = state_ids.unsqueeze(0).expand(group_size, -1)
         full_sequences = torch.cat([prompt_expanded, word_ids_batch], dim=-1)
         prompt_len = state_ids.shape[0]
 
-        # Old policy log probs (before gradient step) and reference log probs
         with torch.no_grad():
             old_logits, _ = model(full_sequences)
             old_completion_logits = old_logits[:, prompt_len - 1 : prompt_len - 1 + 5, :]
-            old_log_probs = sequence_log_probs(old_completion_logits, word_ids_batch)
+            old_lp = sequence_log_probs(old_completion_logits, word_ids_batch)
 
             ref_logits, _ = ref_model(full_sequences)
             ref_completion_logits = ref_logits[:, prompt_len - 1 : prompt_len - 1 + 5, :]
-            ref_log_probs = sequence_log_probs(ref_completion_logits, word_ids_batch)
+            ref_lp = sequence_log_probs(ref_completion_logits, word_ids_batch)
 
-        # Current policy log probs (with gradients for backprop)
-        logits_current, _ = model(full_sequences)
-        completion_logits = logits_current[:, prompt_len - 1 : prompt_len - 1 + 5, :]
-        current_log_probs = sequence_log_probs(completion_logits, word_ids_batch)
-
-        # Compute GRPO loss
-        turn_loss, turn_metrics = grpo_loss(
-            log_probs=current_log_probs,
-            old_log_probs=old_log_probs,
-            rewards=rewards_tensor,
-            ref_log_probs=ref_log_probs,
-            clip_epsilon=clip_epsilon,
-            beta=kl_beta,
+        experiences.append(
+            TurnExperience(
+                state_ids=state_ids,
+                word_ids_batch=word_ids_batch,
+                rewards_tensor=rewards_tensor,
+                ref_log_probs=ref_lp,
+                old_log_probs=old_lp,
+            )
         )
 
-        total_loss = total_loss + turn_loss
-
-        for key in metrics_accum:
-            if key in turn_metrics:
-                metrics_accum[key].append(turn_metrics[key])
-
-        # Pick the best guess to actually play (highest reward)
         best_idx = rewards_tensor.argmax().item()
         chosen_guess = guesses[best_idx]
         total_reward += rewards[best_idx]
 
-        # Play the chosen guess
         new_state, _done = env.step(state, chosen_guess)
-
         feedback = new_state.guesses[-1].feedback if new_state.guesses else []
-
         replay_guesses.append(chosen_guess)
         replay_feedback.append([fb.value for fb in feedback])
-
         state = new_state
-        n_turns += 1
-
-    # Average loss over turns
-    if n_turns > 0:
-        total_loss = total_loss / n_turns
-
-    # Aggregate metrics
-    aggregated: dict[str, float] = {}
-    for key, values in metrics_accum.items():
-        aggregated[key] = sum(values) / max(len(values), 1)
 
     replay = GameReplay(
         target=target_word,
@@ -479,8 +434,56 @@ def play_game_grpo(
         solved=state.solved,
         turns=state.turn,
     )
+    return experiences, replay, total_reward
 
-    return total_loss, aggregated, replay, total_reward
+
+def compute_grpo_loss(
+    model: GPT,
+    experiences: list[TurnExperience],
+    clip_epsilon: float,
+    kl_beta: float,
+) -> tuple[Tensor, dict[str, float]]:
+    """Compute GRPO loss from collected experience.
+
+    This is called AFTER sampling. Because the model weights may have been
+    updated since sampling (via multiple optimization steps on the same batch),
+    current_log_probs can differ from old_log_probs, making clipping active.
+    """
+    total_loss = torch.tensor(0.0, device=experiences[0].state_ids.device)
+    metrics_accum: dict[str, list[float]] = {
+        "policy_loss": [],
+        "kl_div": [],
+        "entropy": [],
+        "clip_fraction": [],
+    }
+
+    for exp in experiences:
+        prompt_expanded = exp.state_ids.unsqueeze(0).expand(exp.word_ids_batch.shape[0], -1)
+        full_sequences = torch.cat([prompt_expanded, exp.word_ids_batch], dim=-1)
+        prompt_len = exp.state_ids.shape[0]
+
+        logits, _ = model(full_sequences)
+        completion_logits = logits[:, prompt_len - 1 : prompt_len - 1 + 5, :]
+        current_log_probs = sequence_log_probs(completion_logits, exp.word_ids_batch)
+
+        turn_loss, turn_metrics = grpo_loss(
+            log_probs=current_log_probs,
+            old_log_probs=exp.old_log_probs,
+            rewards=exp.rewards_tensor,
+            ref_log_probs=exp.ref_log_probs,
+            clip_epsilon=clip_epsilon,
+            beta=kl_beta,
+        )
+        total_loss = total_loss + turn_loss
+        for key in metrics_accum:
+            if key in turn_metrics:
+                metrics_accum[key].append(turn_metrics[key])
+
+    if experiences:
+        total_loss = total_loss / len(experiences)
+
+    aggregated = {k: sum(v) / max(len(v), 1) for k, v in metrics_accum.items()}
+    return total_loss, aggregated
 
 
 # ---------------------------------------------------------------------------
@@ -859,17 +862,12 @@ def train(config: FinetuneConfig, checkpoint_path: str) -> None:
 
         else:
             # --- GRPO training step ---
-            batch_loss = torch.tensor(0.0, device=device)
-            batch_metrics: dict[str, list[float]] = {
-                "policy_loss": [],
-                "kl_div": [],
-                "entropy": [],
-                "clip_fraction": [],
-            }
+            # Phase 1: Collect experience (sampling, no gradients needed)
+            all_experiences: list[list[TurnExperience]] = []
             batch_rewards: list[float] = []
 
             for target in batch_targets:
-                game_loss, game_metrics, replay, game_reward = play_game_grpo(
+                experiences, replay, game_reward = collect_game_experience(
                     model=model,
                     ref_model=ref_model,
                     env=env,
@@ -880,47 +878,68 @@ def train(config: FinetuneConfig, checkpoint_path: str) -> None:
                     trie=word_trie,
                     device=device,
                     group_size=group_size,
-                    clip_epsilon=clip_epsilon,
-                    kl_beta=kl_beta,
                     constrained=constrained,
                 )
+                all_experiences.append(experiences)
+                batch_rewards.append(game_reward)
 
-                batch_loss = batch_loss + game_loss
-
-                for key in batch_metrics:
-                    if key in game_metrics:
-                        batch_metrics[key].append(game_metrics[key])
-
-                # Track rolling metrics
                 recent_wins.append(replay.solved)
                 recent_guesses.append(replay.turns)
                 for g in replay.guesses:
                     recent_valid.append(g in valid_words)
 
-                batch_rewards.append(game_reward)
+            # Phase 2: Multiple optimization epochs on the same batch (PPO-style)
+            # old_log_probs are frozen from sampling; current_log_probs diverge
+            # with each gradient step, making clipping active.
+            ppo_epochs = rl_cfg.ppo_epochs
+            last_metrics: dict[str, float] = {}
+            last_loss = 0.0
+            last_grad_norm = 0.0
 
-            # Average loss over batch
-            batch_loss = batch_loss / batch_size
+            for _epoch in range(ppo_epochs):
+                epoch_loss = torch.tensor(0.0, device=device)
+                epoch_metrics: dict[str, list[float]] = {
+                    "policy_loss": [],
+                    "kl_div": [],
+                    "entropy": [],
+                    "clip_fraction": [],
+                }
 
-            # Backward + optimize
-            optimizer.zero_grad()
-            batch_loss.backward()
-            grad_norm = clip_grad_norm(model, grad_clip)
-            optimizer.step()
+                for game_experiences in all_experiences:
+                    game_loss, game_metrics = compute_grpo_loss(
+                        model,
+                        game_experiences,
+                        clip_epsilon,
+                        kl_beta,
+                    )
+                    epoch_loss = epoch_loss + game_loss
+                    for key in epoch_metrics:
+                        if key in game_metrics:
+                            epoch_metrics[key].append(game_metrics[key])
+
+                epoch_loss = epoch_loss / batch_size
+
+                optimizer.zero_grad()
+                epoch_loss.backward()
+                last_grad_norm = clip_grad_norm(model, grad_clip)
+                optimizer.step()
+
+                last_loss = epoch_loss.item()
+                last_metrics = {k: sum(v) / max(len(v), 1) for k, v in epoch_metrics.items()}
+
             scheduler.step()
 
-            # Logging
+            # Logging (from last epoch)
             lr = optimizer.param_groups[0]["lr"]
             reward_mean = sum(batch_rewards) / len(batch_rewards) if batch_rewards else 0.0
 
-            logger.log_scalar("train/loss", batch_loss.item(), step)
+            logger.log_scalar("train/loss", last_loss, step)
             logger.log_scalar("train/reward_mean", reward_mean, step)
-            logger.log_scalar("train/grad_norm", grad_norm, step)
+            logger.log_scalar("train/grad_norm", last_grad_norm, step)
             logger.log_scalar("train/lr", lr, step)
 
-            for key, values in batch_metrics.items():
-                if values:
-                    logger.log_scalar(f"train/{key}", sum(values) / len(values), step)
+            for key, value in last_metrics.items():
+                logger.log_scalar(f"train/{key}", value, step)
 
         # Rolling metrics
         if recent_wins:
@@ -940,7 +959,7 @@ def train(config: FinetuneConfig, checkpoint_path: str) -> None:
             ag = sum(recent_guesses) / max(len(recent_guesses), 1)
             print(
                 f"step {step:>5d}/{max_steps} | "
-                f"loss {batch_loss.item() if algorithm == 'grpo' else loss.item():.4f} | "
+                f"loss {last_loss if algorithm == 'grpo' else loss.item():.4f} | "
                 f"win_rate {wr:.2%} | "
                 f"avg_guesses {ag:.1f} | "
                 f"lr {lr:.2e} | "

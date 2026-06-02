@@ -18,11 +18,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import torch
+import torch.nn.functional as F
 from mm_model import GPT, GPTConfig, load_checkpoint
 from mm_tokenizers import CharTokenizer
 from mm_training import get_device, seed_everything
 from mm_viz import EvalSnapshot, GameReplay, render_comparison_html, render_games_report
-from mm_wordle import WordleEnv, all_valid_words, game_state_to_tokens, load_answers
+from mm_wordle import WordleEnv, WordTrie, all_valid_words, game_state_to_tokens, load_answers
 
 if TYPE_CHECKING:
     from mm_wordle.game import GameState
@@ -52,17 +53,15 @@ def load_model(checkpoint_path: str, device: torch.device) -> tuple[GPT, GPTConf
 # Constrained decoding
 # ---------------------------------------------------------------------------
 
+
 @torch.no_grad()
-def generate_guess(
+def generate_guess_unconstrained(
     model: GPT,
     tokenizer: CharTokenizer,
     game_state: GameState,
     device: torch.device,
 ) -> str:
-    """Generate a 5-character guess autoregressively (greedy).
-
-    Uses the same game_state_to_tokens format as the training scripts.
-    """
+    """Generate a 5-character guess autoregressively without constraints."""
     state_tokens = game_state_to_tokens(game_state)
     state_ids = tokenizer.encode("".join(state_tokens))
     prompt = torch.tensor([state_ids], dtype=torch.long, device=device)
@@ -72,27 +71,73 @@ def generate_guess(
         text = tokenizer.decode(generated_ids)
     except ValueError:
         text = ""
-    # Keep only lowercase letters and pad/truncate to exactly 5
     letters = [ch for ch in text if "a" <= ch <= "z"]
-    word = "".join(letters[:5]).ljust(5, "a")
-    return word
+    return "".join(letters[:5]).ljust(5, "a")
+
+
+@torch.no_grad()
+def generate_guess_constrained(
+    model: GPT,
+    tokenizer: CharTokenizer,
+    game_state: GameState,
+    trie: WordTrie,
+    device: torch.device,
+) -> str:
+    """Generate a 5-character guess using trie-constrained decoding.
+
+    Same algorithm as finetune.py's sample_constrained: mask logits at each
+    position to only allow characters that continue a valid word in the trie.
+    Uses greedy decoding (low temperature) for deterministic evaluation.
+    """
+    state_tokens = game_state_to_tokens(game_state)
+    state_ids = tokenizer.encode("".join(state_tokens))
+    idx = torch.tensor([state_ids], dtype=torch.long, device=device)
+    prefix = ""
+
+    for _pos in range(5):
+        logits, _ = model(idx)
+        logits = logits[:, -1, :] / 0.1
+
+        valid_chars = trie.valid_next_chars(prefix)
+        if not valid_chars:
+            break
+
+        mask = torch.full_like(logits, float("-inf"))
+        for ch in valid_chars:
+            token_ids = tokenizer.encode(ch)
+            if token_ids:
+                mask[0, token_ids[0]] = 0.0
+        logits = logits + mask
+
+        probs = F.softmax(logits, dim=-1)
+        next_token = probs.argmax(dim=-1, keepdim=True)
+        idx = torch.cat([idx, next_token], dim=1)
+
+        try:
+            ch = tokenizer.decode([next_token.item()])
+            prefix += ch
+        except ValueError:
+            prefix += "?"
+
+    return prefix.ljust(5, "a")[:5]
 
 
 def select_guess(
     model: GPT,
     tokenizer: CharTokenizer,
     game_state: GameState,
-    valid_words: list[str],
     device: torch.device,
-    decoding: str = "constrained",
+    decoding: str,
+    trie: WordTrie,
 ) -> str:
-    """Select the next guess using autoregressive generation.
+    """Select the next guess using the model.
 
-    Both constrained and unconstrained modes use the same generation approach.
-    The model generates 5 characters autoregressively from the game state,
-    using the same token format as the training scripts.
+    Constrained mode uses trie-masked decoding (same as training).
+    Unconstrained mode generates freely.
     """
-    return generate_guess(model, tokenizer, game_state, device)
+    if decoding == "constrained":
+        return generate_guess_constrained(model, tokenizer, game_state, trie, device)
+    return generate_guess_unconstrained(model, tokenizer, game_state, device)
 
 
 # ---------------------------------------------------------------------------
@@ -104,9 +149,9 @@ def play_game(
     model: GPT,
     tokenizer: CharTokenizer,
     env: WordleEnv,
-    valid_words: list[str],
     device: torch.device,
-    decoding: str = "constrained",
+    decoding: str,
+    trie: WordTrie,
     target_word: str | None = None,
 ) -> GameReplay:
     """Play a single Wordle game and return a replay."""
@@ -118,7 +163,7 @@ def play_game(
 
     done = False
     while not done:
-        guess = select_guess(model, tokenizer, state, valid_words, device, decoding)
+        guess = select_guess(model, tokenizer, state, device, decoding, trie)
         state, done = env.step(state, guess)
 
         last_fb = state.guesses[-1]
@@ -224,10 +269,10 @@ def evaluate(
     model: GPT,
     tokenizer: CharTokenizer,
     env: WordleEnv,
-    valid_words: list[str],
     device: torch.device,
     num_games: int,
     decoding: str,
+    trie: WordTrie,
     target_words: list[str] | None = None,
     checkpoint_path: str = "",
 ) -> EvalSnapshot:
@@ -241,7 +286,7 @@ def evaluate(
     for i in range(num_games):
         target = target_words[i % len(target_words)] if target_words else None
 
-        replay = play_game(model, tokenizer, env, valid_words, device, decoding, target_word=target)
+        replay = play_game(model, tokenizer, env, device, decoding, trie, target_word=target)
         replays.append(replay)
 
         status = "solved" if replay.solved else "failed"
@@ -293,9 +338,9 @@ def interactive_mode(
     model: GPT,
     tokenizer: CharTokenizer,
     env: WordleEnv,
-    valid_words: list[str],
     device: torch.device,
     decoding: str,
+    trie: WordTrie,
 ) -> None:
     """Interactive loop: user picks a word, model plays, shows the board."""
     answers = set(load_answers())
@@ -332,7 +377,7 @@ def interactive_mode(
 
         print()
         while not done:
-            guess = select_guess(model, tokenizer, state, valid_words, device, decoding)
+            guess = select_guess(model, tokenizer, state, device, decoding, trie)
             state, done = env.step(state, guess)
             turn += 1
 
@@ -367,6 +412,7 @@ def run_comparison(
     decoding: str,
     seed: int,
     device: torch.device,
+    trie: WordTrie,
     target_words: list[str] | None = None,
 ) -> list[EvalSnapshot]:
     """Run evaluation on multiple checkpoints with the same target words.
@@ -375,9 +421,7 @@ def run_comparison(
     """
     tokenizer = CharTokenizer()
     env = WordleEnv()
-    valid_words_list = sorted(all_valid_words())
 
-    # Generate target words once with the given seed
     if target_words is None:
         seed_everything(seed)
         answers = load_answers()
@@ -391,10 +435,10 @@ def run_comparison(
             model,
             tokenizer,
             env,
-            valid_words_list,
             device,
             num_games,
             decoding,
+            trie,
             target_words=target_words,
             checkpoint_path=ckpt_path,
         )
@@ -555,6 +599,9 @@ def main() -> None:
         target_words = [line.strip().lower() for line in path.read_text().splitlines() if line.strip()]
         print(f"Loaded {len(target_words)} target words from {path}")
 
+    # Build trie for constrained decoding
+    trie = WordTrie.from_words(load_answers())
+
     # --- Comparison mode ---
     if args.compare is not None:
         snapshots = run_comparison(
@@ -563,6 +610,7 @@ def main() -> None:
             args.decoding,
             args.seed,
             device,
+            trie,
             target_words=target_words,
         )
         if args.report:
@@ -577,12 +625,11 @@ def main() -> None:
     model, _config = load_model(args.checkpoint, device)
     tokenizer = CharTokenizer()
     env = WordleEnv()
-    valid_words_list = sorted(all_valid_words())
 
     # Interactive mode
     if args.interactive:
         seed_everything(args.seed)
-        interactive_mode(model, tokenizer, env, valid_words_list, device, args.decoding)
+        interactive_mode(model, tokenizer, env, device, args.decoding, trie)
         return
 
     # Evaluation mode
@@ -591,10 +638,10 @@ def main() -> None:
         model,
         tokenizer,
         env,
-        valid_words_list,
         device,
         args.num_games,
         args.decoding,
+        trie,
         target_words=target_words,
         checkpoint_path=args.checkpoint,
     )

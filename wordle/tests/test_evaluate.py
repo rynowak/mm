@@ -9,13 +9,15 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from evaluate import compute_metrics, generate_guess, play_game
+from evaluate import compute_metrics, generate_guess_constrained, play_game
 from mm_model import GPT, GPTConfig
 from mm_tokenizers import CharTokenizer
 from mm_viz import GameReplay
-from mm_wordle import WordleEnv
+from mm_wordle import WordleEnv, WordTrie
 
 _CPU = torch.device("cpu")
+_WORDS = ["crane", "house", "slate", "about", "train"]
+_TRIE = WordTrie.from_words(_WORDS)
 
 
 def _make_tiny_model(device: torch.device = _CPU) -> GPT:
@@ -33,7 +35,7 @@ class TestGenerateGuess:
         env = WordleEnv()
         state = env.reset(target_word="crane")
 
-        guess = generate_guess(model, tokenizer, state, torch.device("cpu"))
+        guess = generate_guess_constrained(model, tokenizer, state, _TRIE, _CPU)
         assert len(guess) == 5
 
     def test_returns_only_lowercase_letters(self) -> None:
@@ -42,8 +44,17 @@ class TestGenerateGuess:
         env = WordleEnv()
         state = env.reset(target_word="crane")
 
-        guess = generate_guess(model, tokenizer, state, torch.device("cpu"))
+        guess = generate_guess_constrained(model, tokenizer, state, _TRIE, _CPU)
         assert all("a" <= ch <= "z" for ch in guess)
+
+    def test_produces_valid_trie_word(self) -> None:
+        model = _make_tiny_model()
+        tokenizer = CharTokenizer()
+        env = WordleEnv()
+        state = env.reset(target_word="crane")
+
+        guess = generate_guess_constrained(model, tokenizer, state, _TRIE, _CPU)
+        assert _TRIE.is_valid_word(guess)
 
     def test_works_with_game_history(self) -> None:
         model = _make_tiny_model()
@@ -52,7 +63,7 @@ class TestGenerateGuess:
         state = env.reset(target_word="crane")
         state, _ = env.step(state, "house")
 
-        guess = generate_guess(model, tokenizer, state, torch.device("cpu"))
+        guess = generate_guess_constrained(model, tokenizer, state, _TRIE, _CPU)
         assert len(guess) == 5
         assert all("a" <= ch <= "z" for ch in guess)
 
@@ -62,9 +73,8 @@ class TestPlayGame:
         model = _make_tiny_model()
         tokenizer = CharTokenizer()
         env = WordleEnv()
-        valid_words = sorted({"crane", "house", "slate", "about", "trace"})
 
-        replay = play_game(model, tokenizer, env, valid_words, torch.device("cpu"), target_word="crane")
+        replay = play_game(model, tokenizer, env, _CPU, "constrained", _TRIE, target_word="crane")
 
         assert isinstance(replay, GameReplay)
         assert replay.target == "crane"
@@ -76,9 +86,8 @@ class TestPlayGame:
         model = _make_tiny_model()
         tokenizer = CharTokenizer()
         env = WordleEnv()
-        valid_words = sorted({"crane"})
 
-        replay = play_game(model, tokenizer, env, valid_words, torch.device("cpu"), target_word="crane")
+        replay = play_game(model, tokenizer, env, _CPU, "constrained", _TRIE, target_word="crane")
 
         for fb in replay.feedback:
             assert len(fb) == 5
@@ -88,9 +97,8 @@ class TestPlayGame:
         model = _make_tiny_model()
         tokenizer = CharTokenizer()
         env = WordleEnv()
-        valid_words = sorted({"crane"})
 
-        replay = play_game(model, tokenizer, env, valid_words, torch.device("cpu"), target_word="crane")
+        replay = play_game(model, tokenizer, env, _CPU, "constrained", _TRIE, target_word="crane")
         assert replay.turns <= 6
 
 
