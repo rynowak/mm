@@ -40,6 +40,7 @@ from mm_training import (
 )
 from mm_viz import EvalSnapshot, GameReplay, GRPOStepData
 from mm_wordle import (
+    GameState,
     WordleEnv,
     WordTrie,
     compute_reward,
@@ -335,21 +336,29 @@ def collect_game_experience(
     device: torch.device,
     group_size: int,
     constrained: bool,
+    max_turns: int = 6,
+    initial_state: GameState | None = None,
+    initial_candidates: list[str] | None = None,
 ) -> tuple[list[TurnExperience], GameReplay, float, list[dict]]:
     """Play a Wordle game and collect experience for GRPO optimization.
 
+    Args:
+        max_turns: Stop after this many turns (for curriculum Phase 1).
+        initial_state: Start from this state (for curriculum Phase 2).
+        initial_candidates: Start with this candidate list (for Phase 2).
+
     Returns (experiences, replay, total_reward, turn_details).
-    turn_details is a list of dicts with per-turn reward breakdown for the dashboard.
     """
-    state = env.reset(target_word)
+    state = initial_state if initial_state is not None else env.reset(target_word)
     experiences: list[TurnExperience] = []
     replay_guesses: list[str] = []
     replay_feedback: list[list[str]] = []
     turn_details: list[dict] = []
     total_reward = 0.0
-    candidates = list(answers)
+    candidates = list(initial_candidates) if initial_candidates is not None else list(answers)
+    turns_played = 0
 
-    while not state.solved and not state.failed:
+    while not state.solved and not state.failed and turns_played < max_turns:
         state_tokens = game_state_to_prompt(state)
         state_ids = torch.tensor(tokenizer.encode("".join(state_tokens)), dtype=torch.long, device=device)
 
@@ -426,6 +435,7 @@ def collect_game_experience(
 
         candidates = filter_candidates(candidates, chosen_guess, feedback)
         state = new_state
+        turns_played += 1
 
     replay = GameReplay(
         target=target_word,
@@ -761,7 +771,20 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
         ref_model = create_reference_model(model)
         print("Created frozen reference model")
 
+    # Load opener model for Phase 2
+    opener_model = None
+    if rl_cfg.curriculum_phase == 2 and rl_cfg.opening_checkpoint:
+        opener_path = pathlib.Path(rl_cfg.opening_checkpoint)
+        print(f"Loading opener model from {opener_path}")
+        opener_model = load_pretrained_model(opener_path, device)
+        opener_model.eval()
+        for param in opener_model.parameters():
+            param.requires_grad = False
+        print("Opener model loaded (frozen)")
+
     print(f"Algorithm: {algorithm}, Decoding: {rl_cfg.decoding}")
+    if rl_cfg.curriculum_phase > 0:
+        print(f"Curriculum phase: {rl_cfg.curriculum_phase}, max_turns: {rl_cfg.max_turns}")
 
     # Optimizer and scheduler
     optimizer = create_optimizer(
@@ -962,7 +985,27 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
 
             batch_replays: list[GameReplay] = []
             batch_turn_details: list[list[dict]] = []
+            curriculum_phase = rl_cfg.curriculum_phase
+            max_game_turns = rl_cfg.max_turns
+
             for target in batch_targets:
+                # Phase 2: play opening turns with frozen opener model
+                init_state = None
+                init_candidates = None
+                if curriculum_phase == 2 and opener_model is not None:
+                    init_state = env.reset(target_word=target)
+                    init_candidates = list(answers)
+                    for _ in range(2):
+                        if init_state.solved or init_state.failed:
+                            break
+                        st = game_state_to_prompt(init_state)
+                        si = torch.tensor(tokenizer.encode("".join(st)), dtype=torch.long, device=device)
+                        samples = sample_constrained(opener_model, si, word_trie, tokenizer, device, n_samples=1)
+                        guess = samples[0][0]
+                        init_state, _ = env.step(init_state, guess)
+                        fb = init_state.guesses[-1].feedback
+                        init_candidates = filter_candidates(init_candidates, guess, fb)
+
                 experiences, replay, game_reward, turn_details = collect_game_experience(
                     model=model,
                     ref_model=ref_model,
@@ -974,6 +1017,9 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
                     device=device,
                     group_size=group_size,
                     constrained=constrained,
+                    max_turns=max_game_turns,
+                    initial_state=init_state,
+                    initial_candidates=init_candidates,
                 )
                 all_experiences.append(experiences)
                 batch_rewards.append(game_reward)

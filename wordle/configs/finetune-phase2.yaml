@@ -1,0 +1,22 @@
+rl:
+  algorithm: "grpo"
+  decoding: "constrained"
+  action_space: "answers"
+  seed: 42
+  learning_rate: 1e-5
+  weight_decay: 0.01
+  warmup_steps: 50
+  max_steps: 2000
+  grad_clip: 1.0
+  eval_interval: 100
+  checkpoint_interval: 100
+  group_size: 4
+  clip_epsilon: 0.2
+  kl_beta: 0.2
+  ppo_epochs: 2
+  baseline_momentum: 0.99
+  batch_size: 8
+  max_eval_games: 50
+  curriculum_phase: 2
+  max_turns: 4
+  opening_checkpoint: ""  # set at runtime via --checkpoint

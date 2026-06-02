@@ -50,22 +50,25 @@ class PretrainConfig(BaseModel):
 class RLConfig(BaseModel):
     algorithm: str = "grpo"
     decoding: str = "constrained"
-    action_space: str = "answers"  # "answers" (~2,300 words) or "all" (~13K)
+    action_space: str = "answers"
     seed: int = 42
-    learning_rate: float = 5e-5
+    learning_rate: float = 1e-5
     weight_decay: float = 0.01
     warmup_steps: int = 50
     max_steps: int = 2000
     grad_clip: float = 1.0
     eval_interval: int = 100
-    checkpoint_interval: int = 500
+    checkpoint_interval: int = 100
     group_size: int = 4
     clip_epsilon: float = 0.2
-    kl_beta: float = 0.04
-    ppo_epochs: int = 4
+    kl_beta: float = 0.2
+    ppo_epochs: int = 2
     baseline_momentum: float = 0.99
     batch_size: int = 8
     max_eval_games: int = 50
+    curriculum_phase: int = 0
+    max_turns: int = 6
+    opening_checkpoint: str = ""
 
 
 class FinetuneConfig(BaseModel):
