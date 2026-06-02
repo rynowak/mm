@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import torch
 from datasets import load_dataset
-from mm_wordle import all_valid_words
+from mm_wordle import all_valid_words, generate_transcripts
 from torch.utils.data import Dataset
 
 if TYPE_CHECKING:
@@ -135,12 +135,17 @@ def load_pretrain_data(
     word_tokens = _tokenize_word_lists(config, tokenizer)
     print(f"  Word lists: {len(word_tokens):,} tokens")
 
+    n_games = config["data"].get("transcript_games", 5000)
+    print(f"Generating {n_games} Wordle game transcripts...")
+    transcript_tokens = generate_transcripts(tokenizer, n_games=n_games)
+    print(f"  Transcripts: {len(transcript_tokens):,} tokens")
+
     # Use story tokens for both train and val (split by fraction),
-    # then add word list tokens only to training data
+    # then add word list + transcript tokens only to training data
     n_val = int(len(story_tokens) * val_fraction)
     n_train_stories = len(story_tokens) - n_val
 
-    train_all = story_tokens[:n_train_stories] + word_tokens
+    train_all = story_tokens[:n_train_stories] + word_tokens + transcript_tokens
     val_all = story_tokens[n_train_stories:]
     print(f"  Total train: {len(train_all):,} tokens, val: {len(val_all):,} tokens")
 

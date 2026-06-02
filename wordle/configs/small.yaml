@@ -19,4 +19,5 @@ training:
 data:
   dataset: "roneneldan/TinyStories"
   word_list_repeats: 50
+  transcript_games: 5000
   val_fraction: 0.05
