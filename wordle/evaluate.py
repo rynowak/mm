@@ -91,27 +91,48 @@ def generate_guess_constrained(
     """
     state_tokens = game_state_to_prompt(game_state)
     state_ids = tokenizer.encode("".join(state_tokens))
-    idx = torch.tensor([state_ids], dtype=torch.long, device=device)
+    prompt = torch.tensor([state_ids], dtype=torch.long, device=device)
     prefix = ""
+    vocab_size = model.config.vocab_size
 
-    for _pos in range(5):
-        logits, _ = model(idx)
+    logits, _, kv_cache = model(prompt)
+    logits = logits[:, -1, :] / 0.1
+
+    valid_chars = trie.valid_next_chars(prefix)
+    if not valid_chars:
+        return "aaaaa"
+
+    mask = torch.full((1, vocab_size), float("-inf"), device=device)
+    for ch in valid_chars:
+        token_ids = tokenizer.encode(ch)
+        if token_ids:
+            mask[0, token_ids[0]] = 0.0
+    logits = logits + mask
+    probs = F.softmax(logits, dim=-1)
+    next_token = probs.argmax(dim=-1, keepdim=True)
+
+    try:
+        ch = tokenizer.decode([int(next_token.item())])
+        prefix += ch
+    except ValueError:
+        prefix += "?"
+
+    for pos in range(4):
+        logits, _, kv_cache = model(next_token, kv_cache=kv_cache, start_pos=len(state_ids) + pos)
         logits = logits[:, -1, :] / 0.1
 
         valid_chars = trie.valid_next_chars(prefix)
         if not valid_chars:
             break
 
-        mask = torch.full_like(logits, float("-inf"))
+        mask = torch.full((1, vocab_size), float("-inf"), device=device)
         for ch in valid_chars:
             token_ids = tokenizer.encode(ch)
             if token_ids:
                 mask[0, token_ids[0]] = 0.0
         logits = logits + mask
-
         probs = F.softmax(logits, dim=-1)
         next_token = probs.argmax(dim=-1, keepdim=True)
-        idx = torch.cat([idx, next_token], dim=1)
 
         try:
             ch = tokenizer.decode([int(next_token.item())])

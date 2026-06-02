@@ -44,8 +44,8 @@ class TestCreateReferenceModel:
 
         x = torch.randint(0, 50, (1, 10))
         with torch.no_grad():
-            out_model, _ = model(x)
-            out_ref, _ = ref(x)
+            out_model, _, _ = model(x)
+            out_ref, _, _ = ref(x)
         assert torch.allclose(out_model, out_ref)
 
     def test_is_independent_copy(self) -> None:
@@ -58,8 +58,8 @@ class TestCreateReferenceModel:
 
         x = torch.randint(0, 50, (1, 10))
         with torch.no_grad():
-            out_model, _ = model(x)
-            out_ref, _ = ref(x)
+            out_model, _, _ = model(x)
+            out_ref, _, _ = ref(x)
         assert not torch.allclose(out_model, out_ref)
 
 
@@ -182,6 +182,6 @@ class TestLoadPretrainedModel:
         model.eval()
         loaded.eval()
         with torch.no_grad():
-            out_orig, _ = model(x)
-            out_loaded, _ = loaded(x)
+            out_orig, _, _ = model(x)
+            out_loaded, _, _ = loaded(x)
         assert torch.allclose(out_orig, out_loaded)

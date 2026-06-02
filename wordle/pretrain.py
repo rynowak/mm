@@ -87,7 +87,7 @@ def evaluate(
         target_ids = target_ids.to(device)
         loss_mask = loss_mask.to(device)
 
-        logits, _ = model(input_ids)
+        logits, _, _ = model(input_ids)
         loss_all = F.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.view(-1), reduction="none")
         loss_all = loss_all.view(target_ids.shape)
         masked_loss = (loss_all * loss_mask).sum()
@@ -258,7 +258,7 @@ def train(config: PretrainConfig, resume_path: str | None = None) -> None:
             loss_mask = loss_mask.to(device)
 
             # Forward pass — compute masked loss (only on target letter tokens)
-            logits, _ = model(input_ids)
+            logits, _, _ = model(input_ids)
             loss_all = F.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.view(-1), reduction="none")
             loss_all = loss_all.view(target_ids.shape)
             loss = (loss_all * loss_mask).sum() / loss_mask.sum().clamp(min=1)

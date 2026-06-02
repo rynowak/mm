@@ -1,4 +1,4 @@
-"""Decoder-only GPT model."""
+"""Decoder-only GPT model with KV caching."""
 
 from __future__ import annotations
 
@@ -12,10 +12,10 @@ from torch import Tensor
 if TYPE_CHECKING:
     from mm_model.config import GPTConfig
 
+KVCache = tuple[Tensor, Tensor]
+
 
 class MLP(nn.Module):
-    """Feed-forward network with 4x expansion and GELU activation."""
-
     def __init__(self, config: GPTConfig) -> None:
         super().__init__()
         self.fc = nn.Linear(config.embed_dim, 4 * config.embed_dim, bias=config.bias)
@@ -31,21 +31,18 @@ class MLP(nn.Module):
 
 
 class CausalSelfAttention(nn.Module):
-    """Multi-head causal self-attention using scaled_dot_product_attention."""
-
     def __init__(self, config: GPTConfig) -> None:
         super().__init__()
         assert config.embed_dim % config.n_heads == 0
         self.n_heads = config.n_heads
         self.head_dim = config.embed_dim // config.n_heads
 
-        # Combined QKV projection
         self.qkv = nn.Linear(config.embed_dim, 3 * config.embed_dim, bias=config.bias)
         self.out_proj = nn.Linear(config.embed_dim, config.embed_dim, bias=config.bias)
         self.attn_dropout = config.dropout
         self.resid_dropout = nn.Dropout(config.dropout)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, kv_cache: KVCache | None = None) -> tuple[Tensor, KVCache]:
         b, t, c = x.size()
         qkv = self.qkv(x)
         q, k, v = qkv.split(c, dim=2)
@@ -54,21 +51,26 @@ class CausalSelfAttention(nn.Module):
         k = k.view(b, t, self.n_heads, self.head_dim).transpose(1, 2)
         v = v.view(b, t, self.n_heads, self.head_dim).transpose(1, 2)
 
+        if kv_cache is not None:
+            k_prev, v_prev = kv_cache
+            k = torch.cat([k_prev, k], dim=2)
+            v = torch.cat([v_prev, v], dim=2)
+
+        new_cache: KVCache = (k, v)
+
         attn_out = F.scaled_dot_product_attention(
             q,
             k,
             v,
             dropout_p=self.attn_dropout if self.training else 0.0,
-            is_causal=True,
+            is_causal=kv_cache is None,
         )
 
         attn_out = attn_out.transpose(1, 2).contiguous().view(b, t, c)
-        return self.resid_dropout(self.out_proj(attn_out))
+        return self.resid_dropout(self.out_proj(attn_out)), new_cache
 
 
 class TransformerBlock(nn.Module):
-    """Pre-norm transformer block: LN -> Attention -> residual -> LN -> MLP -> residual."""
-
     def __init__(self, config: GPTConfig) -> None:
         super().__init__()
         self.ln1 = nn.LayerNorm(config.embed_dim)
@@ -76,15 +78,14 @@ class TransformerBlock(nn.Module):
         self.ln2 = nn.LayerNorm(config.embed_dim)
         self.mlp = MLP(config)
 
-    def forward(self, x: Tensor) -> Tensor:
-        x = x + self.attn(self.ln1(x))
+    def forward(self, x: Tensor, kv_cache: KVCache | None = None) -> tuple[Tensor, KVCache]:
+        attn_out, new_cache = self.attn(self.ln1(x), kv_cache)
+        x = x + attn_out
         x = x + self.mlp(self.ln2(x))
-        return x
+        return x, new_cache
 
 
 class GPT(nn.Module):
-    """Decoder-only GPT language model."""
-
     def __init__(self, config: GPTConfig) -> None:
         super().__init__()
         self.config = config
@@ -97,19 +98,37 @@ class GPT(nn.Module):
         self.ln_f = nn.LayerNorm(config.embed_dim)
         self.lm_head = nn.Linear(config.embed_dim, config.vocab_size, bias=config.bias)
 
-    def forward(self, idx: Tensor, targets: Tensor | None = None) -> tuple[Tensor, Tensor | None]:
-        """Forward pass. Returns (logits, loss). Loss is computed if targets are provided."""
-        b, t = idx.size()
-        assert t <= self.config.context_len, f"Sequence length {t} exceeds context_len {self.config.context_len}"
+    def forward(
+        self,
+        idx: Tensor,
+        targets: Tensor | None = None,
+        kv_cache: list[KVCache] | None = None,
+        start_pos: int = 0,
+    ) -> tuple[Tensor, Tensor | None, list[KVCache]]:
+        """Forward pass with optional KV cache.
 
-        pos = torch.arange(0, t, dtype=torch.long, device=idx.device)
+        Args:
+            idx: Token indices (batch, seq_len). With cache, only new tokens.
+            targets: Optional targets for loss computation.
+            kv_cache: List of (K, V) per layer from previous positions.
+            start_pos: Position offset for positional embeddings when using cache.
+
+        Returns:
+            (logits, loss, new_kv_cache)
+        """
+        b, t = idx.size()
+
+        pos = torch.arange(start_pos, start_pos + t, dtype=torch.long, device=idx.device)
 
         tok_emb = self.token_emb(idx)
         pos_emb = self.pos_emb(pos)
         x = self.drop(tok_emb + pos_emb)
 
-        for block in self.blocks:
-            x = block(x)
+        new_caches: list[KVCache] = []
+        for i, block in enumerate(self.blocks):
+            layer_cache = kv_cache[i] if kv_cache is not None else None
+            x, new_cache = block(x, layer_cache)
+            new_caches.append(new_cache)
 
         x = self.ln_f(x)
         logits = self.lm_head(x)
@@ -118,28 +137,22 @@ class GPT(nn.Module):
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
 
-        return logits, loss
+        return logits, loss, new_caches
 
     @torch.no_grad()
-    def generate(self, idx: Tensor, max_new_tokens: int, temperature: float = 1.0, top_k: int | None = None) -> Tensor:
-        """Autoregressive generation.
-
-        Args:
-            idx: Input token indices of shape (batch, seq_len).
-            max_new_tokens: Number of new tokens to generate.
-            temperature: Sampling temperature. 1.0 = no change, <1.0 = sharper, >1.0 = softer.
-            top_k: If set, only sample from the top k most likely tokens.
-
-        Returns:
-            Token indices of shape (batch, seq_len + max_new_tokens).
-        """
+    def generate(
+        self,
+        idx: Tensor,
+        max_new_tokens: int,
+        temperature: float = 1.0,
+        top_k: int | None = None,
+        use_cache: bool = True,
+    ) -> Tensor:
         was_training = self.training
         self.eval()
-        for _ in range(max_new_tokens):
-            # Crop to context length
-            idx_cond = idx if idx.size(1) <= self.config.context_len else idx[:, -self.config.context_len :]
 
-            logits, _ = self(idx_cond)
+        if use_cache:
+            logits, _, kv_cache = self(idx)
             logits = logits[:, -1, :] / temperature
 
             if top_k is not None:
@@ -149,6 +162,31 @@ class GPT(nn.Module):
             probs = F.softmax(logits, dim=-1)
             next_token = torch.multinomial(probs, num_samples=1)
             idx = torch.cat([idx, next_token], dim=1)
+
+            for _ in range(max_new_tokens - 1):
+                logits, _, kv_cache = self(next_token, kv_cache=kv_cache, start_pos=idx.size(1) - 1)
+                logits = logits[:, -1, :] / temperature
+
+                if top_k is not None:
+                    v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                    logits[logits < v[:, [-1]]] = -float("inf")
+
+                probs = F.softmax(logits, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1)
+                idx = torch.cat([idx, next_token], dim=1)
+        else:
+            for _ in range(max_new_tokens):
+                idx_cond = idx if idx.size(1) <= self.config.context_len else idx[:, -self.config.context_len :]
+                logits, _, _ = self(idx_cond)
+                logits = logits[:, -1, :] / temperature
+
+                if top_k is not None:
+                    v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                    logits[logits < v[:, [-1]]] = -float("inf")
+
+                probs = F.softmax(logits, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1)
+                idx = torch.cat([idx, next_token], dim=1)
 
         if was_training:
             self.train()

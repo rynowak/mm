@@ -65,7 +65,7 @@ def collect_completions_log_probs(
 
     # Run model forward pass
     with torch.no_grad():
-        logits, _ = model(full_sequences)  # (group_size, total_len, vocab_size)
+        logits, _, _ = model(full_sequences)  # (group_size, total_len, vocab_size)
 
     # Extract logits that predict the completion tokens.
     # Logits at position (prompt_len - 1) predict the first completion token.

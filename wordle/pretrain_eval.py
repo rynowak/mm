@@ -57,7 +57,7 @@ def top_predictions(
 ) -> list[str]:
     """Return the top-k predicted token strings from a prompt."""
     prompt = torch.tensor([prompt_ids], dtype=torch.long, device=device)
-    logits, _ = model(prompt)
+    logits, _, _ = model(prompt)
     probs = torch.softmax(logits[0, -1, :], dim=-1)
     top_ids = probs.topk(k).indices.tolist()
     result = []

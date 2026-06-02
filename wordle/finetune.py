@@ -144,20 +144,38 @@ def sample_constrained(
     model.eval()
 
     prompt = game_state_ids.unsqueeze(0).expand(n_samples, -1).to(device)
-    idx = prompt  # (n_samples, prompt_len)
     prefixes = [""] * n_samples
     vocab_size = model.config.vocab_size
+    all_tokens = [prompt]
 
-    for _pos in range(5):
-        logits, _ = model(idx)
-        logits = logits[:, -1, :] / temperature  # (n_samples, vocab_size)
+    # First pass: process full prompt, get KV cache
+    logits, _, kv_cache = model(prompt)
+    logits = logits[:, -1, :] / temperature
+
+    mask = _build_trie_mask(trie, prefixes, tokenizer, vocab_size, device)
+    logits = logits + mask
+    probs = F.softmax(logits, dim=-1)
+    next_tokens = torch.multinomial(probs, num_samples=1)
+    all_tokens.append(next_tokens)
+
+    for i in range(n_samples):
+        try:
+            ch = tokenizer.decode([int(next_tokens[i].item())])
+            prefixes[i] += ch
+        except ValueError:
+            prefixes[i] += "?"
+
+    # Remaining 4 characters: use KV cache, only process 1 new token
+    for _pos in range(4):
+        logits, _, kv_cache = model(next_tokens, kv_cache=kv_cache, start_pos=prompt.size(1) + _pos)
+        logits = logits[:, -1, :] / temperature
 
         mask = _build_trie_mask(trie, prefixes, tokenizer, vocab_size, device)
         logits = logits + mask
 
         probs = F.softmax(logits, dim=-1)
-        next_tokens = torch.multinomial(probs, num_samples=1)  # (n_samples, 1)
-        idx = torch.cat([idx, next_tokens], dim=1)
+        next_tokens = torch.multinomial(probs, num_samples=1)
+        all_tokens.append(next_tokens)
 
         for i in range(n_samples):
             try:
@@ -166,9 +184,10 @@ def sample_constrained(
             except ValueError:
                 prefixes[i] += "?"
 
+    word_tokens = torch.cat(all_tokens[1:], dim=1)  # (n_samples, 5)
     results: list[tuple[str, Tensor]] = []
     for i in range(n_samples):
-        word_ids = idx[i, -5:]
+        word_ids = word_tokens[i]
         word = prefixes[i].ljust(5, "a")[:5]
         results.append((word, word_ids))
 
@@ -251,7 +270,7 @@ def compute_guess_log_probs(
     # Build full sequence: (1, prompt_len + 5)
     full_seq = torch.cat([game_state_ids, word_ids]).unsqueeze(0)
 
-    logits, _ = model(full_seq)  # (1, total_len, vocab_size)
+    logits, _, _ = model(full_seq)  # (1, total_len, vocab_size)
 
     # Extract logits predicting the word characters
     completion_logits = logits[:, prompt_len - 1 : prompt_len - 1 + 5, :]  # (1, 5, vocab)
@@ -395,13 +414,13 @@ def collect_game_experience(
         prompt_len = state_ids.shape[0]
 
         with torch.no_grad():
-            old_logits, _ = model(full_sequences)
+            old_logits, _, _ = model(full_sequences)
             old_completion_logits = old_logits[:, prompt_len - 1 : prompt_len - 1 + 5, :]
             if constrained:
                 old_completion_logits = _apply_trie_masks(old_completion_logits, word_ids_batch, trie, tokenizer)
             old_lp = sequence_log_probs(old_completion_logits, word_ids_batch)
 
-            ref_logits, _ = ref_model(full_sequences)
+            ref_logits, _, _ = ref_model(full_sequences)
             ref_completion_logits = ref_logits[:, prompt_len - 1 : prompt_len - 1 + 5, :]
             if constrained:
                 ref_completion_logits = _apply_trie_masks(ref_completion_logits, word_ids_batch, trie, tokenizer)
@@ -509,7 +528,7 @@ def compute_grpo_loss(
         full_sequences = torch.cat([prompt_expanded, exp.word_ids_batch], dim=-1)
         prompt_len = exp.state_ids.shape[0]
 
-        logits, _ = model(full_sequences)
+        logits, _, _ = model(full_sequences)
         completion_logits = logits[:, prompt_len - 1 : prompt_len - 1 + 5, :]
         if trie is not None and tokenizer is not None:
             completion_logits = _apply_trie_masks(completion_logits, exp.word_ids_batch, trie, tokenizer)
@@ -592,11 +611,11 @@ def collect_grpo_step_data(
     full_sequences = torch.cat([prompt_expanded, word_ids_batch], dim=-1)
 
     with torch.no_grad():
-        logits_new, _ = model(full_sequences)
+        logits_new, _, _ = model(full_sequences)
         completion_logits_new = logits_new[:, prompt_len - 1 : prompt_len - 1 + 5, :]
         new_log_probs = sequence_log_probs(completion_logits_new, word_ids_batch)
 
-        ref_logits, _ = ref_model(full_sequences)
+        ref_logits, _, _ = ref_model(full_sequences)
         ref_completion_logits = ref_logits[:, prompt_len - 1 : prompt_len - 1 + 5, :]
         ref_log_probs_t = sequence_log_probs(ref_completion_logits, word_ids_batch)
 

@@ -59,7 +59,7 @@ class TestGPTModel:
         model.eval()
 
         idx = torch.randint(0, VOCAB_SIZE, (2, 16))
-        logits, loss = model(idx)
+        logits, loss, _ = model(idx)
 
         assert logits.shape == (2, 16, VOCAB_SIZE)
         assert loss is None
@@ -71,7 +71,7 @@ class TestGPTModel:
 
         idx = torch.randint(0, VOCAB_SIZE, (2, 16))
         targets = torch.randint(0, VOCAB_SIZE, (2, 16))
-        logits, loss = model(idx, targets=targets)
+        logits, loss, _ = model(idx, targets=targets)
 
         assert logits.shape == (2, 16, VOCAB_SIZE)
         assert loss is not None
@@ -117,7 +117,7 @@ class TestCheckpoint:
         # Do a forward+backward to populate optimizer state
         idx = torch.randint(0, VOCAB_SIZE, (2, 8))
         targets = torch.randint(0, VOCAB_SIZE, (2, 8))
-        _, loss = model(idx, targets=targets)
+        _, loss, _ = model(idx, targets=targets)
         loss.backward()
         optimizer.step()
 
