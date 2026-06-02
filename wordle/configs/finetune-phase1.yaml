@@ -10,7 +10,7 @@ rl:
   grad_clip: 1.0
   eval_interval: 100
   checkpoint_interval: 100
-  group_size: 4
+  group_size: 8
   clip_epsilon: 0.2
   kl_beta: 0.2
   ppo_epochs: 2
