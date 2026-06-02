@@ -77,7 +77,7 @@ def test_create_scheduler_warmup_curve_shape() -> None:
     lrs: list[float] = []
     for _ in range(total_steps):
         lrs.append(optimizer.param_groups[0]["lr"])
-        # Need a dummy backward pass for scheduler step
+        optimizer.step()
         scheduler.step()
 
     # LR starts low (near 0)
