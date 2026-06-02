@@ -830,6 +830,13 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
     word_trie = build_word_trie(rl_cfg.action_space)
     print(f"  Action space: {rl_cfg.action_space}")
 
+    # Precompute expected info gain for turn 1
+    from mm_wordle.reward import precompute_expected_info_gain
+
+    print("Precomputing expected info gain for all answer words...")
+    precompute_expected_info_gain()
+    print("  Done")
+
     # Fixed evaluation set — reuse from previous run on resume
     max_eval_games = rl_cfg.max_eval_games
     if resume_path is not None:
