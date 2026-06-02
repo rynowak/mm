@@ -12,20 +12,17 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-from mm_viz import (
-    GameReplay,
-    render_game_html,
-)
+from mm_viz import GameReplay, render_game_html
 
 app = FastAPI()
 RUN_DIR: Path = Path(".")
 
 
-def _all_step_files() -> list[Path]:
-    d = RUN_DIR / "step_data"
-    if not d.exists():
-        return []
-    return sorted(d.glob("step-*.json"), key=lambda f: int(f.stem.split("-")[1]))
+def _load_live() -> dict | None:
+    f = RUN_DIR / "live" / "latest.json"
+    if not f.exists():
+        return None
+    return json.loads(f.read_text())
 
 
 def _all_evals() -> list[tuple[int, float, float]]:
@@ -34,57 +31,40 @@ def _all_evals() -> list[tuple[int, float, float]]:
         sf = d / "snapshot.json"
         if sf.exists():
             data = json.loads(sf.read_text())
-            results.append((data.get("step", 0), data.get("win_rate", 0.0), data.get("avg_guesses", 0.0)))
+            results.append(
+                (
+                    data.get("step", 0),
+                    data.get("win_rate", 0.0),
+                    data.get("avg_guesses", 0.0),
+                )
+            )
     return results
 
 
-def _load_replays(step: int) -> list[GameReplay]:
-    sf = RUN_DIR / f"eval-{step}" / "snapshot.json"
-    if not sf.exists():
-        return []
-    data = json.loads(sf.read_text())
-    return [
-        GameReplay(
-            target=r["target"],
-            guesses=r["guesses"],
-            feedback=r["feedback"],
-            solved=r["solved"],
-            turns=r["turns"],
-        )
-        for r in data.get("replays", [])
-    ]
-
-
-def _load_step(path: Path) -> dict:
-    return json.loads(path.read_text())
-
-
 CSS = """
-* { box-sizing: border-box; }
-body { font-family: -apple-system, sans-serif; margin: 0; background: #1a1a2e; color: #eee; }
-.top-bar { background: #16213e; padding: 8px 20px; display: flex; align-items: center; gap: 20px; }
-.top-bar h1 { font-size: 18px; margin: 0; color: #6aaa64; }
-.top-bar .stat { font-size: 14px; color: #aaa; }
-.top-bar .stat b { color: #6aaa64; font-size: 18px; }
-.main { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; height: calc(100vh - 44px); }
-.panel { background: #16213e; border-radius: 8px; padding: 12px; overflow-y: auto; }
-.panel h2 { margin: 0 0 8px; font-size: 15px; color: #6aaa64; border-bottom: 1px solid #333; padding-bottom: 4px; }
-.game-grid { display: flex; flex-wrap: wrap; gap: 8px; }
-.game-card { flex: 0 0 160px; font-size: 12px; }
-.game-card .meta { color: #888; font-size: 11px; margin: 2px 0; }
-.grpo-group { margin: 8px 0; }
-.grpo-row { display: flex; align-items: center; gap: 8px; padding: 4px 0;
-           border-bottom: 1px solid #222; font-size: 13px; font-family: monospace; }
-.grpo-word { width: 60px; font-weight: bold; }
-.grpo-reward { width: 60px; text-align: right; }
-.grpo-adv { width: 80px; text-align: right; }
-.grpo-bar { height: 14px; border-radius: 2px; min-width: 2px; }
-.positive { color: #6aaa64; }
-.negative { color: #c0392b; }
-.chart-row { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 2px 0; }
-.chart-label { width: 50px; text-align: right; color: #888; }
-.chart-bar { height: 16px; background: #6aaa64; border-radius: 2px; }
-.chart-val { width: 40px; color: #aaa; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, sans-serif; background: #0f0f1a; color: #eee; }
+.top { background: #16213e; padding: 10px 20px; display: flex;
+       align-items: center; gap: 24px; border-bottom: 2px solid #6aaa64; }
+.top h1 { font-size: 20px; color: #6aaa64; }
+.top .s { font-size: 14px; color: #aaa; }
+.top .s b { color: #fff; font-size: 16px; }
+.main { padding: 12px; }
+.section { margin-bottom: 16px; }
+.section h2 { font-size: 14px; color: #6aaa64; margin-bottom: 8px;
+              text-transform: uppercase; letter-spacing: 1px; }
+.games { display: flex; flex-wrap: wrap; gap: 10px; }
+.gc { background: #16213e; border-radius: 6px; padding: 8px;
+      width: 180px; font-size: 12px; }
+.gc .meta { color: #888; font-size: 11px; margin-top: 4px; }
+.gc .win { color: #6aaa64; font-weight: bold; }
+.gc .loss { color: #c0392b; font-weight: bold; }
+.wr-row { display: flex; align-items: center; gap: 8px;
+          font-size: 13px; padding: 2px 0; }
+.wr-label { width: 50px; text-align: right; color: #888; }
+.wr-bar { height: 18px; background: #6aaa64; border-radius: 3px;
+          transition: width 0.3s; }
+.wr-val { width: 40px; color: #ccc; }
 """
 
 
@@ -95,121 +75,82 @@ async def index():
 <script src="https://unpkg.com/htmx.org@2.0.4"></script>
 <style>{CSS}</style>
 </head><body>
-<div class="top-bar"
-     hx-get="/frag/topbar" hx-trigger="every 5s" hx-swap="innerHTML">
-    <h1>Wordle Training</h1><span class="stat">Loading...</span>
+<div class="top" hx-get="/f/top" hx-trigger="every 3s" hx-swap="innerHTML">
+    <h1>Wordle</h1><span class="s">Loading...</span>
 </div>
 <div class="main">
-    <div class="panel" hx-get="/frag/grpo" hx-trigger="load, every 5s" hx-swap="innerHTML">
-        Loading GRPO...
+    <div class="section" hx-get="/f/live" hx-trigger="load, every 3s" hx-swap="innerHTML">
+        Loading...
     </div>
-    <div class="panel" hx-get="/frag/games" hx-trigger="load, every 10s" hx-swap="innerHTML">
-        Loading games...
+    <div class="section" hx-get="/f/history" hx-trigger="load, every 10s" hx-swap="innerHTML">
     </div>
 </div>
 </body></html>""")
 
 
-@app.get("/frag/topbar", response_class=HTMLResponse)
-async def frag_topbar():
+@app.get("/f/top", response_class=HTMLResponse)
+async def frag_top():
+    live = _load_live()
     evals = _all_evals()
-    steps = _all_step_files()
-    latest = int(steps[-1].stem.split("-")[1]) if steps else 0
 
-    html = "<h1>Wordle Training</h1>"
-    html += f'<span class="stat">Step <b>{latest}</b></span>'
+    step = live["step"] if live else 0
+    n_games = len(live["games"]) if live else 0
+    wins = sum(1 for g in live["games"] if g["solved"]) if live else 0
+
+    html = "<h1>Wordle</h1>"
+    html += f'<span class="s">Step <b>{step}</b></span>'
+    html += f'<span class="s">Batch <b>{wins}/{n_games}</b> wins</span>'
 
     if evals:
         _, wr, ag = evals[-1]
-        html += f'<span class="stat">Eval Win Rate <b>{wr:.0%}</b></span>'
-        html += f'<span class="stat">Avg Guesses <b>{ag:.1f}</b></span>'
-
-    if len(evals) > 1:
-        prev_wr = evals[-2][1]
-        curr_wr = evals[-1][1]
-        delta = curr_wr - prev_wr
-        color = "positive" if delta >= 0 else "negative"
-        html += f'<span class="stat {color}">({delta:+.0%})</span>'
+        html += f'<span class="s">Eval <b>{wr:.0%}</b></span>'
 
     return HTMLResponse(html)
 
 
-@app.get("/frag/grpo", response_class=HTMLResponse)
-async def frag_grpo():
-    files = _all_step_files()
-    if not files:
-        return HTMLResponse("<h2>GRPO Steps</h2><p>Waiting for data...</p>")
+@app.get("/f/live", response_class=HTMLResponse)
+async def frag_live():
+    live = _load_live()
+    if not live:
+        return HTMLResponse("<h2>Current Step</h2><p>Waiting...</p>")
 
-    # Show last 3 steps
-    html = "<h2>Latest GRPO Steps</h2>"
-    for f in reversed(files[-3:]):
-        data = _load_step(f)
-        step = data.get("step", 0)
-        kl = data.get("kl_divergence", 0)
-        completions = data.get("completions", [])
-        rewards = data.get("rewards", [])
-        advantages = data.get("advantages", [])
-        game_text = data.get("game_state_text", "")
+    step = live["step"]
+    games = live["games"]
+    wins = sum(1 for g in games if g["solved"])
 
-        html += '<div class="grpo-group">'
-        html += f"<b>Step {step}</b> "
-        html += f'<span style="color:#888">KL={kl:.3f} | {game_text[:40]}</span>'
-
-        if completions:
-            # Sort by reward
-            items = sorted(
-                zip(completions, rewards, advantages, strict=True),
-                key=lambda x: x[1],
-                reverse=True,
-            )
-            for comp, rew, adv in items:
-                word = comp.get("text", "?????")
-                color = "positive" if adv >= 0 else "negative"
-                bar_w = int(abs(adv) * 40)
-                html += '<div class="grpo-row">'
-                html += f'<span class="grpo-word">{word}</span>'
-                html += f'<span class="grpo-reward">{rew:+.3f}</span>'
-                html += f'<span class="grpo-adv {color}">{adv:+.3f}</span>'
-                html += f'<div class="grpo-bar {color}" style="width:{bar_w}px"></div>'
-                html += "</div>"
-
-        html += "</div>"
-
-    # Win rate chart from evals
-    evals = _all_evals()
-    if evals:
-        html += "<h2>Eval Win Rate History</h2>"
-        for step, wr, _ag in evals:
-            bar_w = int(wr * 200)
-            html += '<div class="chart-row">'
-            html += f'<span class="chart-label">{step}</span>'
-            html += f'<div class="chart-bar" style="width:{bar_w}px"></div>'
-            html += f'<span class="chart-val">{wr:.0%}</span>'
-            html += "</div>"
-
+    html = f"<h2>Step {step} — {wins}/{len(games)} wins</h2>"
+    html += '<div class="games">'
+    for g in games:
+        r = GameReplay(
+            target=g["target"],
+            guesses=g["guesses"],
+            feedback=g["feedback"],
+            solved=g["solved"],
+            turns=g["turns"],
+        )
+        status_cls = "win" if r.solved else "loss"
+        status_txt = f"solved in {r.turns}" if r.solved else "failed"
+        html += f'<div class="gc">{render_game_html(r)}'
+        html += f'<p class="meta">{r.target} '
+        html += f'<span class="{status_cls}">{status_txt}</span></p></div>'
+    html += "</div>"
     return HTMLResponse(html)
 
 
-@app.get("/frag/games", response_class=HTMLResponse)
-async def frag_games():
+@app.get("/f/history", response_class=HTMLResponse)
+async def frag_history():
     evals = _all_evals()
     if not evals:
-        return HTMLResponse("<h2>Eval Games</h2><p>Waiting for first eval...</p>")
+        return HTMLResponse("")
 
-    latest_step = evals[-1][0]
-    replays = _load_replays(latest_step)
-    if not replays:
-        return HTMLResponse("<h2>Eval Games</h2><p>No replays</p>")
-
-    wins = [r for r in replays if r.solved]
-    html = f"<h2>Step {latest_step} — {len(wins)}/{len(replays)} wins</h2>"
-    html += '<div class="game-grid">'
-    for r in replays:
-        status = f"✓ {r.turns}" if r.solved else "✗"
-        html += f'<div class="game-card">{render_game_html(r)}'
-        html += f'<p class="meta">{r.target} {status}</p></div>'
-    html += "</div>"
-
+    html = "<h2>Eval History</h2>"
+    for step, wr, _ag in evals:
+        bar_w = int(wr * 300)
+        html += '<div class="wr-row">'
+        html += f'<span class="wr-label">{step}</span>'
+        html += f'<div class="wr-bar" style="width:{bar_w}px"></div>'
+        html += f'<span class="wr-val">{wr:.0%}</span>'
+        html += "</div>"
     return HTMLResponse(html)
 
 

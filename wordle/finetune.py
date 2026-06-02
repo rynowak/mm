@@ -986,6 +986,7 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
             all_experiences: list[list[TurnExperience]] = []
             batch_rewards: list[float] = []
 
+            batch_replays: list[GameReplay] = []
             for target in batch_targets:
                 experiences, replay, game_reward = collect_game_experience(
                     model=model,
@@ -1003,11 +1004,30 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
                 )
                 all_experiences.append(experiences)
                 batch_rewards.append(game_reward)
+                batch_replays.append(replay)
 
                 recent_wins.append(replay.solved)
                 recent_guesses.append(replay.turns)
                 for g in replay.guesses:
                     recent_valid.append(g in valid_words)
+
+            # Save batch replays for live dashboard
+            live_dir = logger.log_dir / "live"
+            live_dir.mkdir(exist_ok=True)
+            live_data = {
+                "step": step,
+                "games": [
+                    {
+                        "target": r.target,
+                        "guesses": r.guesses,
+                        "feedback": r.feedback,
+                        "solved": r.solved,
+                        "turns": r.turns,
+                    }
+                    for r in batch_replays
+                ],
+            }
+            (live_dir / "latest.json").write_text(json.dumps(live_data))
 
             # Phase 2: Multiple optimization epochs on the same batch (PPO-style)
             # old_log_probs are frozen from sampling; current_log_probs diverge
