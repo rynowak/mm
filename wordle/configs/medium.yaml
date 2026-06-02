@@ -17,6 +17,6 @@ training:
   checkpoint_interval: 1000
 
 data:
-  word_list_repeats: 50
+  word_list_repeats: 10
   transcript_games: 20000
   val_fraction: 0.05
