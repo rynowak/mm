@@ -53,9 +53,9 @@ body { font-family: -apple-system, sans-serif; background: #0f0f1a; color: #eee;
 .section { margin-bottom: 16px; }
 .section h2 { font-size: 14px; color: #6aaa64; margin-bottom: 8px;
               text-transform: uppercase; letter-spacing: 1px; }
-.games { display: flex; flex-wrap: wrap; gap: 10px; }
-.gc { background: #16213e; border-radius: 6px; padding: 8px;
-      width: 180px; font-size: 12px; }
+.games { display: flex; flex-wrap: wrap; gap: 8px; }
+.gc { background: #16213e; border-radius: 6px; padding: 6px;
+      width: 160px; font-size: 11px; }
 .gc .meta { color: #888; font-size: 11px; margin-top: 4px; }
 .gc .win { color: #6aaa64; font-weight: bold; }
 .gc .loss { color: #c0392b; font-weight: bold; }

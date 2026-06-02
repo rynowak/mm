@@ -19,9 +19,9 @@ def _tile_html(letter: str, color: str) -> str:
     bg = _COLORS.get(color, _COLORS["empty"])
     text_color = "#ffffff" if color in ("green", "yellow", "gray") else "#000000"
     return (
-        f'<div style="width:48px;height:48px;display:flex;align-items:center;'
+        f'<div style="width:28px;height:28px;display:flex;align-items:center;'
         f"justify-content:center;background:{bg};color:{text_color};"
-        f'font-weight:bold;font-size:24px;border-radius:4px;">'
+        f'font-weight:bold;font-size:14px;border-radius:3px;">'
         f"{letter.upper()}</div>"
     )
 
@@ -31,8 +31,15 @@ def _board_html(replay: GameReplay) -> str:
     rows: list[str] = []
     for guess, fb in zip(replay.guesses, replay.feedback, strict=True):
         tiles = "".join(_tile_html(guess[i], fb[i]) for i in range(word_len))
-        rows.append(f'<div style="display:grid;grid-template-columns:repeat({word_len},48px);gap:4px;">{tiles}</div>')
-    return '<div style="display:flex;flex-direction:column;gap:4px;padding:8px;">' + "\n".join(rows) + "</div>"
+        rows.append(
+            f'<div style="display:grid;grid-template-columns:'
+            f"repeat({word_len},28px);gap:2px;\">{tiles}</div>"
+        )
+    return (
+        '<div style="display:flex;flex-direction:column;gap:2px;">'
+        + "\n".join(rows)
+        + "</div>"
+    )
 
 
 def render_game_html(replay: GameReplay) -> str:
