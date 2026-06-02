@@ -11,7 +11,7 @@ training:
   learning_rate: 3e-4
   weight_decay: 0.1
   warmup_steps: 100
-  max_steps: 5000
+  max_steps: 10000
   grad_clip: 1.0
   eval_interval: 500
   checkpoint_interval: 1000
