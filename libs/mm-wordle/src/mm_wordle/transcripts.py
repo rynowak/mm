@@ -42,16 +42,18 @@ def examples_from_game(state: GameState, tokenizer: CharTokenizer) -> list[Pretr
     return examples
 
 
-def _play_game(args: tuple[str, str, list[str], list[str]]) -> GameState:
-    """Play a single game. Picklable for multiprocessing."""
-    target, strategy, answers, valid_guesses = args
+def _play_game(args: tuple[str, str]) -> GameState:
+    """Play a single game. Word lists loaded in-process to avoid serialization."""
+    target, strategy = args
+    answers = load_answers()
+    valid_guesses = list(load_valid_guesses()) + list(answers)
     env = WordleEnv()
     if strategy == "random":
         return play_game_random(env, target, valid_guesses)
     elif strategy == "decent":
         return play_game_decent(env, target, valid_guesses)
     else:
-        return play_game_good(env, target, answers, valid_guesses)
+        return play_game_good(env, target, list(answers), valid_guesses)
 
 
 def generate_examples(
@@ -64,25 +66,23 @@ def generate_examples(
     Uses multiprocessing for parallel game generation.
     """
     answers = load_answers()
-    valid_guesses = list(load_valid_guesses()) + list(answers)
 
     n_random = int(n_games * mix[0])
     n_decent = int(n_games * mix[1])
 
     targets = [random.choice(answers) for _ in range(n_games)]
 
-    tasks: list[tuple[str, str, list[str], list[str]]] = []
+    tasks: list[tuple[str, str]] = []
     for i, target in enumerate(targets):
         if i < n_random:
-            strategy = "random"
+            tasks.append((target, "random"))
         elif i < n_random + n_decent:
-            strategy = "decent"
+            tasks.append((target, "decent"))
         else:
-            strategy = "good"
-        tasks.append((target, strategy, list(answers), valid_guesses))
+            tasks.append((target, "good"))
 
     with ProcessPoolExecutor() as pool:
-        states = list(pool.map(_play_game, tasks, chunksize=100))
+        states = list(pool.map(_play_game, tasks, chunksize=50))
 
     examples: list[PretrainExample] = []
     for state in states:
