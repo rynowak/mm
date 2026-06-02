@@ -1020,6 +1020,10 @@ def train(
                         fb = init_state.guesses[-1].feedback
                         init_candidates = filter_candidates(init_candidates, guess, fb)
 
+                # Skip if opener already solved the puzzle
+                if init_state is not None and init_state.solved:
+                    continue
+
                 experiences, replay, game_reward, turn_details = collect_game_experience(
                     model=model,
                     ref_model=ref_model,
@@ -1036,6 +1040,8 @@ def train(
                     initial_candidates=init_candidates,
                     solve_bonus=curriculum_phase != 1,
                 )
+                if not experiences:
+                    continue
                 all_experiences.append(experiences)
                 batch_rewards.append(game_reward)
                 batch_replays.append(replay)
@@ -1058,6 +1064,10 @@ def train(
                         actual = last_cd["actual"]
                         n_after = max(int(n_before / (2**actual)), 1) if actual > 0 else n_before
                         recent_candidates_remaining.append(n_after)
+
+            # Skip optimization if no experiences collected (all games solved by opener)
+            if not all_experiences:
+                continue
 
             # Phase 2: Multiple optimization epochs on the same batch (PPO-style)
             # old_log_probs are frozen from sampling; current_log_probs diverge
