@@ -1,12 +1,13 @@
-"""Generate Wordle game transcripts for pre-training data."""
+"""Generate Wordle pre-training examples from game transcripts."""
 
 from __future__ import annotations
 
 import random
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from mm_wordle.game import WordleEnv
-from mm_wordle.serialize import game_state_to_tokens
+from mm_wordle.game import GameState, WordleEnv
+from mm_wordle.serialize import game_state_to_prompt
 from mm_wordle.solver import play_game_decent, play_game_good, play_game_random
 from mm_wordle.words import load_answers, load_valid_guesses
 
@@ -14,20 +15,45 @@ if TYPE_CHECKING:
     from mm_tokenizers import CharTokenizer
 
 
-def generate_transcripts(
+@dataclass
+class PretrainExample:
+    """A single pre-training example: prompt + target."""
+
+    prompt_ids: list[int]
+    target_ids: list[int]
+
+
+def examples_from_game(state: GameState, tokenizer: CharTokenizer) -> list[PretrainExample]:
+    """Extract per-turn pre-training examples from a completed game.
+
+    Each turn produces one example:
+      prompt = game state up to that turn (what the model sees)
+      target = the 5 letter token IDs of the next guess (what the model predicts)
+    """
+    examples: list[PretrainExample] = []
+    env = WordleEnv()
+    replay_state = env.reset(target_word=state.target)
+
+    for gf in state.guesses:
+        prompt_tokens = game_state_to_prompt(replay_state)
+        prompt_ids = tokenizer.encode("".join(prompt_tokens))
+        target_ids = tokenizer.encode(gf.guess)
+
+        examples.append(PretrainExample(prompt_ids=prompt_ids, target_ids=target_ids))
+
+        replay_state, _ = env.step(replay_state, gf.guess)
+
+    return examples
+
+
+def generate_examples(
     tokenizer: CharTokenizer,
-    n_games: int = 5000,
+    n_games: int = 20000,
     mix: tuple[float, float, float] = (0.3, 0.4, 0.3),
-) -> list[int]:
-    """Generate tokenized Wordle game transcripts at mixed skill levels.
+) -> list[PretrainExample]:
+    """Generate pre-training examples from games at mixed skill levels.
 
-    Args:
-        tokenizer: The character tokenizer.
-        n_games: Total number of games to generate.
-        mix: (random_fraction, decent_fraction, good_fraction).
-
-    Returns:
-        Flat list of token IDs (games separated by [bos]...[eos]).
+    Each game produces one example per turn. A 4-turn game produces 4 examples.
     """
     answers = load_answers()
     valid_guesses = list(load_valid_guesses()) + list(answers)
@@ -35,7 +61,8 @@ def generate_transcripts(
 
     n_random = int(n_games * mix[0])
     n_decent = int(n_games * mix[1])
-    tokens: list[int] = []
+
+    examples: list[PretrainExample] = []
     targets = [random.choice(answers) for _ in range(n_games)]
 
     for i, target in enumerate(targets):
@@ -46,8 +73,6 @@ def generate_transcripts(
         else:
             state = play_game_good(env, target, answers, valid_guesses)
 
-        transcript_tokens = game_state_to_tokens(state)
-        encoded = tokenizer.encode("".join(transcript_tokens))
-        tokens.extend(encoded)
+        examples.extend(examples_from_game(state, tokenizer))
 
-    return tokens
+    return examples

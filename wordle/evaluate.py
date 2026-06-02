@@ -23,7 +23,7 @@ from mm_model import GPT, GPTConfig, load_checkpoint
 from mm_tokenizers import CharTokenizer
 from mm_training import get_device, seed_everything
 from mm_viz import EvalSnapshot, GameReplay, render_comparison_html, render_games_report
-from mm_wordle import WordleEnv, WordTrie, all_valid_words, game_state_to_tokens, load_answers
+from mm_wordle import WordleEnv, WordTrie, all_valid_words, game_state_to_prompt, load_answers
 
 if TYPE_CHECKING:
     from mm_wordle.game import GameState
@@ -62,7 +62,7 @@ def generate_guess_unconstrained(
     device: torch.device,
 ) -> str:
     """Generate a 5-character guess autoregressively without constraints."""
-    state_tokens = game_state_to_tokens(game_state)
+    state_tokens = game_state_to_prompt(game_state)
     state_ids = tokenizer.encode("".join(state_tokens))
     prompt = torch.tensor([state_ids], dtype=torch.long, device=device)
     output = model.generate(prompt, max_new_tokens=5, temperature=0.1, top_k=5)
@@ -89,7 +89,7 @@ def generate_guess_constrained(
     position to only allow characters that continue a valid word in the trie.
     Uses greedy decoding (low temperature) for deterministic evaluation.
     """
-    state_tokens = game_state_to_tokens(game_state)
+    state_tokens = game_state_to_prompt(game_state)
     state_ids = tokenizer.encode("".join(state_tokens))
     idx = torch.tensor([state_ids], dtype=torch.long, device=device)
     prefix = ""

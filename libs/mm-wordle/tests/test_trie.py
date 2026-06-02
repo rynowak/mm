@@ -39,6 +39,7 @@ class TestWordTrie:
 
     def test_large_word_list(self) -> None:
         from mm_wordle import load_answers
+
         words = load_answers()
         trie = WordTrie.from_words(words)
         for w in words[:100]:

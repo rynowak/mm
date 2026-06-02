@@ -45,7 +45,7 @@ from mm_wordle import (
     WordTrie,
     all_valid_words,
     compute_reward,
-    game_state_to_tokens,
+    game_state_to_prompt,
     load_answers,
 )
 from torch import Tensor
@@ -314,7 +314,7 @@ def play_game_reinforce(
 
     while not state.solved and not state.failed:
         # Encode game state to tokens
-        state_tokens = game_state_to_tokens(state)
+        state_tokens = game_state_to_prompt(state)
         state_ids = torch.tensor(tokenizer.encode("".join(state_tokens)), dtype=torch.long, device=device)
 
         # Sample a guess
@@ -391,7 +391,7 @@ def collect_game_experience(
     total_reward = 0.0
 
     while not state.solved and not state.failed:
-        state_tokens = game_state_to_tokens(state)
+        state_tokens = game_state_to_prompt(state)
         state_ids = torch.tensor(tokenizer.encode("".join(state_tokens)), dtype=torch.long, device=device)
 
         if constrained:
@@ -566,7 +566,7 @@ def collect_grpo_step_data(
 ) -> GRPOStepData | None:
     """Collect a GRPOStepData snapshot for one game turn (first turn only)."""
     state = env.reset(target_word)
-    state_tokens = game_state_to_tokens(state)
+    state_tokens = game_state_to_prompt(state)
     state_text = "".join(state_tokens)
     state_ids = torch.tensor(tokenizer.encode(state_text), dtype=torch.long, device=device)
 
@@ -678,7 +678,7 @@ def evaluate_games(
         feedback_list: list[list[str]] = []
 
         while not state.solved and not state.failed:
-            state_tokens = game_state_to_tokens(state)
+            state_tokens = game_state_to_prompt(state)
             state_ids = torch.tensor(
                 tokenizer.encode("".join(state_tokens)),
                 dtype=torch.long,

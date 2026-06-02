@@ -17,8 +17,9 @@ import time
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from config import PretrainConfig
-from data import load_pretrain_data
+from data import collate_wordle, load_pretrain_data
 from mm_model import GPT, GPTConfig, load_checkpoint, save_checkpoint
 from mm_tokenizers import CharTokenizer
 from mm_training import (
@@ -75,21 +76,27 @@ def evaluate(
     device: torch.device,
     max_batches: int = 50,
 ) -> float:
-    """Compute average validation loss."""
+    """Compute average masked validation loss."""
     model.eval()
     total_loss = 0.0
-    n_batches = 0
-    for i, (input_ids, target_ids) in enumerate(val_loader):
+    total_tokens = 0
+    for i, (input_ids, target_ids, loss_mask) in enumerate(val_loader):
         if i >= max_batches:
             break
         input_ids = input_ids.to(device)
         target_ids = target_ids.to(device)
-        _, loss = model(input_ids, targets=target_ids)
-        total_loss += loss.item()
-        n_batches += 1
+        loss_mask = loss_mask.to(device)
+
+        logits, _ = model(input_ids)
+        loss_all = F.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.view(-1), reduction="none")
+        loss_all = loss_all.view(target_ids.shape)
+        masked_loss = (loss_all * loss_mask).sum()
+        n_tokens = loss_mask.sum().clamp(min=1)
+        total_loss += masked_loss.item()
+        total_tokens += n_tokens.item()
 
     model.train()
-    return total_loss / max(n_batches, 1)
+    return total_loss / max(total_tokens, 1)
 
 
 @torch.no_grad()
@@ -188,17 +195,24 @@ def train(config: PretrainConfig, resume_path: str | None = None) -> None:
 
     # Load data
     train_dataset, val_dataset = load_pretrain_data(config.model_dump(), tokenizer)
+    pad_id = tokenizer.pad_id
+
+    def collate_fn(batch):
+        return collate_wordle(batch, pad_id)
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=config.training.batch_size,
         shuffle=True,
         drop_last=True,
+        collate_fn=collate_fn,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=config.training.batch_size,
         shuffle=False,
         drop_last=True,
+        collate_fn=collate_fn,
     )
 
     # Determine model size label from config
@@ -214,7 +228,7 @@ def train(config: PretrainConfig, resume_path: str | None = None) -> None:
         experiment=f"pretrain-{size_label}",
         config=config.model_dump(),
         seed=seed,
-        dataset_id=config.data.dataset,
+        dataset_id="wordle-transcripts",
     )
     manifest.save(logger.log_dir / "manifest.json")
 
@@ -223,7 +237,6 @@ def train(config: PretrainConfig, resume_path: str | None = None) -> None:
     grad_clip = config.training.grad_clip
     eval_interval = config.training.eval_interval
     checkpoint_interval = config.training.checkpoint_interval
-    block_size = config.model.context_len
     batch_size = config.training.batch_size
 
     model.train()
@@ -232,19 +245,23 @@ def train(config: PretrainConfig, resume_path: str | None = None) -> None:
     t_start = time.time()
 
     print(f"\nStarting training from step {step} to {max_steps}")
-    print(f"  Batch size: {batch_size}, Block size: {block_size}")
+    print(f"  Batch size: {batch_size}")
     print(f"  Eval every {eval_interval} steps, Checkpoint every {checkpoint_interval} steps\n")
 
     while step < max_steps:
-        for input_ids, target_ids in train_loader:
+        for input_ids, target_ids, loss_mask in train_loader:
             if step >= max_steps:
                 break
 
             input_ids = input_ids.to(device)
             target_ids = target_ids.to(device)
+            loss_mask = loss_mask.to(device)
 
-            # Forward pass
-            _, loss = model(input_ids, targets=target_ids)
+            # Forward pass — compute masked loss (only on target letter tokens)
+            logits, _ = model(input_ids)
+            loss_all = F.cross_entropy(logits.view(-1, logits.size(-1)), target_ids.view(-1), reduction="none")
+            loss_all = loss_all.view(target_ids.shape)
+            loss = (loss_all * loss_mask).sum() / loss_mask.sum().clamp(min=1)
 
             # Backward pass
             optimizer.zero_grad()
@@ -254,7 +271,7 @@ def train(config: PretrainConfig, resume_path: str | None = None) -> None:
             scheduler.step()
 
             step += 1
-            tokens_processed += batch_size * block_size
+            tokens_processed += int(loss_mask.sum().item())
 
             # Get current learning rate
             lr = optimizer.param_groups[0]["lr"]

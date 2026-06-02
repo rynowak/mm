@@ -32,9 +32,7 @@ class PretrainTrainingConfig(BaseModel):
 
 
 class DataConfig(BaseModel):
-    dataset: str = "roneneldan/TinyStories"
-    word_list_repeats: int = 50
-    transcript_games: int = 5000
+    transcript_games: int = 20000
     val_fraction: float = 0.05
 
 

@@ -29,7 +29,8 @@ def _is_consistent(candidate: str, guess: str, feedback: list[LetterFeedback]) -
                 return False
         elif fb == LetterFeedback.GRAY:
             count_in_guess = sum(
-                1 for j in range(len(guess))
+                1
+                for j in range(len(guess))
                 if guess[j] == g_ch and feedback[j] in (LetterFeedback.GREEN, LetterFeedback.YELLOW)
             )
             count_in_candidate = candidate.count(g_ch)
