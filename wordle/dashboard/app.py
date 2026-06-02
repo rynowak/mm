@@ -180,21 +180,77 @@ async def frag_live():
     return HTMLResponse(html)
 
 
+def _load_history() -> list[dict]:
+    """Read training history from history.jsonl."""
+    f = RUN_DIR / "live" / "history.jsonl"
+    if not f.exists():
+        return []
+    lines = f.read_text().strip().split("\n")
+    return [json.loads(line) for line in lines if line]
+
+
+def _svg_line_chart(
+    points: list[tuple[int, float]], width: int = 400, height: int = 120, color: str = "#6aaa64", label: str = ""
+) -> str:
+    """Render a simple SVG line chart."""
+    if len(points) < 2:
+        return ""
+    steps = [p[0] for p in points]
+    vals = [p[1] for p in points]
+    min_s, max_s = min(steps), max(steps)
+    min_v, max_v = min(vals), max(vals)
+    v_range = max_v - min_v if max_v != min_v else 1.0
+    s_range = max_s - min_s if max_s != min_s else 1.0
+
+    pad = 40
+    cw = width - pad
+    ch = height - 20
+
+    coords = []
+    for s, v in points:
+        x = pad + (s - min_s) / s_range * cw
+        y = 10 + (1 - (v - min_v) / v_range) * ch
+        coords.append(f"{x:.1f},{y:.1f}")
+
+    polyline = " ".join(coords)
+    svg = f'<svg width="{width}" height="{height}" style="background:#111;border-radius:4px">'
+    if label:
+        svg += f'<text x="{pad}" y="12" fill="#888" font-size="10">{label}</text>'
+    svg += f'<text x="2" y="{10 + ch}" fill="#666" font-size="9">{min_v:.3f}</text>'
+    svg += f'<text x="2" y="18" fill="#666" font-size="9">{max_v:.3f}</text>'
+    svg += f'<polyline points="{polyline}" fill="none" stroke="{color}" stroke-width="1.5"/>'
+    svg += "</svg>"
+    return svg
+
+
 @app.get("/f/history", response_class=HTMLResponse)
 async def frag_history():
-    evals = _all_evals()
-    if not evals:
-        return HTMLResponse("")
+    html = ""
+    history = _load_history()
 
-    html = "<h2>Eval History</h2>"
-    for step, wr, _ag in evals:
-        bar_w = int(wr * 300)
-        html += '<div class="wr-row">'
-        html += f'<span class="wr-label">{step}</span>'
-        html += f'<div class="wr-bar" style="width:{bar_w}px"></div>'
-        html += f'<span class="wr-val">{wr:.0%}</span>'
+    if history:
+        loss_pts = [(h["step"], h["loss"]) for h in history]
+        kl_pts = [(h["step"], h["kl_div"]) for h in history]
+        reward_pts = [(h["step"], h["reward_mean"]) for h in history]
+
+        html += '<div style="display:flex;flex-wrap:wrap;gap:8px">'
+        html += _svg_line_chart(loss_pts, label="Loss", color="#e07c4c")
+        html += _svg_line_chart(kl_pts, label="KL Divergence", color="#c9b458")
+        html += _svg_line_chart(reward_pts, label="Reward Mean", color="#6aaa64")
         html += "</div>"
-    return HTMLResponse(html)
+
+    evals = _all_evals()
+    if evals:
+        html += "<h2>Eval History</h2>"
+        for step, wr, _ag in evals:
+            bar_w = int(wr * 300)
+            html += '<div class="wr-row">'
+            html += f'<span class="wr-label">{step}</span>'
+            html += f'<div class="wr-bar" style="width:{bar_w}px"></div>'
+            html += f'<span class="wr-val">{wr:.0%}</span>'
+            html += "</div>"
+
+    return HTMLResponse(html if html else "")
 
 
 def main():

@@ -1082,6 +1082,19 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
             }
             (live_dir / "latest.json").write_text(json.dumps(live_data))
 
+            # Append to history for charts
+            history_line = json.dumps(
+                {
+                    "step": step,
+                    "loss": last_loss,
+                    "kl_div": last_metrics.get("kl_div", 0.0),
+                    "reward_mean": reward_mean,
+                    "clip_fraction": last_metrics.get("clip_fraction", 0.0),
+                }
+            )
+            with open(live_dir / "history.jsonl", "a") as hf:
+                hf.write(history_line + "\n")
+
         # Rolling metrics
         if recent_wins:
             win_rate = sum(recent_wins) / len(recent_wins)
