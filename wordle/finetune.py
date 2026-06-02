@@ -1011,24 +1011,6 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
                 for g in replay.guesses:
                     recent_valid.append(g in valid_words)
 
-            # Save batch replays for live dashboard
-            live_dir = logger.log_dir / "live"
-            live_dir.mkdir(exist_ok=True)
-            live_data = {
-                "step": step,
-                "games": [
-                    {
-                        "target": r.target,
-                        "guesses": r.guesses,
-                        "feedback": r.feedback,
-                        "solved": r.solved,
-                        "turns": r.turns,
-                    }
-                    for r in batch_replays
-                ],
-            }
-            (live_dir / "latest.json").write_text(json.dumps(live_data))
-
             # Phase 2: Multiple optimization epochs on the same batch (PPO-style)
             # old_log_probs are frozen from sampling; current_log_probs diverge
             # with each gradient step, making clipping active.
@@ -1083,6 +1065,31 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
 
             for key, value in last_metrics.items():
                 logger.log_scalar(f"train/{key}", value, step)
+
+            # Save live data for dashboard
+            live_dir = logger.log_dir / "live"
+            live_dir.mkdir(exist_ok=True)
+            live_data = {
+                "step": step,
+                "loss": last_loss,
+                "reward_mean": reward_mean,
+                "rewards": batch_rewards,
+                "kl_div": last_metrics.get("kl_div", 0.0),
+                "clip_fraction": last_metrics.get("clip_fraction", 0.0),
+                "entropy": last_metrics.get("entropy", 0.0),
+                "games": [
+                    {
+                        "target": r.target,
+                        "guesses": r.guesses,
+                        "feedback": r.feedback,
+                        "solved": r.solved,
+                        "turns": r.turns,
+                        "reward": br,
+                    }
+                    for r, br in zip(batch_replays, batch_rewards, strict=True)
+                ],
+            }
+            (live_dir / "latest.json").write_text(json.dumps(live_data))
 
         # Rolling metrics
         if recent_wins:

@@ -101,6 +101,16 @@ async def frag_top():
     html += f'<span class="s">Step <b>{step}</b></span>'
     html += f'<span class="s">Batch <b>{wins}/{n_games}</b> wins</span>'
 
+    if live:
+        loss = live.get("loss", 0)
+        kl = live.get("kl_div", 0)
+        clip = live.get("clip_fraction", 0)
+        rew = live.get("reward_mean", 0)
+        html += f'<span class="s">Loss <b>{loss:.4f}</b></span>'
+        html += f'<span class="s">KL <b>{kl:.3f}</b></span>'
+        html += f'<span class="s">Clip <b>{clip:.2f}</b></span>'
+        html += f'<span class="s">Reward <b>{rew:.2f}</b></span>'
+
     if evals:
         _, wr, ag = evals[-1]
         html += f'<span class="s">Eval <b>{wr:.0%}</b></span>'
@@ -130,9 +140,11 @@ async def frag_live():
         )
         status_cls = "win" if r.solved else "loss"
         status_txt = f"solved in {r.turns}" if r.solved else "failed"
+        reward = g.get("reward", 0)
         html += f'<div class="gc">{render_game_html(r)}'
         html += f'<p class="meta">{r.target} '
-        html += f'<span class="{status_cls}">{status_txt}</span></p></div>'
+        html += f'<span class="{status_cls}">{status_txt}</span> '
+        html += f"R={reward:+.2f}</p></div>"
     html += "</div>"
     return HTMLResponse(html)
 
