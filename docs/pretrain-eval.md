@@ -1,16 +1,16 @@
 # Pre-Training Evaluation Criteria
 
-Before moving to RL fine-tuning, the pre-trained model must pass these criteria. The purpose of pre-training is to give the model a foundation that RL can build on — a diverse distribution over valid Wordle words and an understanding of the game transcript format.
+Before moving to RL fine-tuning, the pre-trained model must pass these criteria. The purpose of pre-training is to give the model a foundation that RL can build on — a diverse distribution over valid Wordle words and an understanding of the game format.
 
 ## Positive Criteria (must pass)
 
 ### 1. Generates valid Wordle words from `[bos]`
 
-The turn-1 RL prompt is `[bos]`. The model must be able to generate valid 5-letter words from this prompt.
+The turn-1 RL prompt is `[bos]`. The model must generate valid 5-letter words from this prompt without trie assistance.
 
-**Test:** Generate 100 five-character sequences from `[bos]` using trie-constrained decoding. At least 30% should be words from the answer list.
+**Test:** Generate 100 five-character sequences from `[bos]` (unconstrained, no trie). At least 30% should be valid words from the answer list.
 
-**Why:** If the model can't produce valid words from the start-of-game prompt, RL has no useful behavior to reinforce.
+**Why:** If the model can't produce valid words on its own, pre-training hasn't taught it the vocabulary. The trie is a safety net during RL, not a substitute for the model knowing real words.
 
 ### 2. Diverse word generation
 
@@ -20,29 +20,29 @@ The model must not collapse to a single word or a handful of words.
 
 **Why:** GRPO needs diversity in the group to compute meaningful advantages. If all group samples are the same word, advantages are zero and the model learns nothing.
 
-### 3. Understands the game transcript format
+### 3. Generates letters after `[sep]`
 
-The model must have learned that feedback tokens follow guess letters, and that letters follow `[sep]`.
+After a game state ending with `[sep]`, the model should produce letter tokens — this is the behavior RL depends on.
 
-**Test:** Given the prompt `[bos] s l a t e`, check what the model predicts next. The top predictions should be feedback tokens (`[green]`, `[yellow]`, `[gray]`), not letters.
+**Test:** Given the prompt `[bos] s l a t e [gray] [gray] [green] [gray] [green] [sep]`, check the model's top predictions. The top-5 predicted tokens should be letters (a-z), not feedback tokens or special tokens.
 
-**Test:** Given the prompt `[bos] s l a t e [gray] [gray] [green] [gray] [green] [sep]`, check what the model predicts next. The top predictions should be letters (a-z), not feedback tokens or special tokens.
-
-**Why:** The model needs to understand the structure — letters come in groups of 5, followed by 5 feedback tokens, then `[sep]`, then more letters. Without this, the model won't produce coherent game play.
+**Why:** During RL, the prompt always ends with `[bos]` (turn 1) or `[sep]` (later turns). The model must respond to both by generating letters. Since loss masking means the model was never trained to predict feedback or `[sep]` tokens, we only need to verify it produces letters in the positions where it was trained.
 
 ## Negative Criteria (must NOT happen)
 
 ### 4. No degenerate output from game prompts
 
-Given a mid-game prompt with feedback tokens, the model should not produce gibberish or repeat the same letter.
+Given a mid-game prompt with feedback tokens, the model should produce diverse valid words without trie assistance.
 
-**Test:** Given 10 different mid-game prompts (varying feedback patterns), generate words using trie-constrained decoding. At least 80% should be valid 5-letter words.
+**Test:** Given 10 different mid-game prompts (varying feedback patterns), generate 5-character sequences (unconstrained). At least 50% should be valid 5-letter words.
 
-### 5. No single-word dominance
+**Why:** If mid-game prompts produce gibberish, the feedback tokens in context are confusing the model rather than helping it.
+
+### 5. No single-word dominance across game states
 
 **Test:** Generate 100 words from 10 different game state prompts (1000 total). No single word accounts for more than 5% of all generations across all prompts.
 
-**Why:** If the model always guesses the same word regardless of game state, it hasn't learned to use feedback.
+**Why:** If the model always guesses the same word regardless of game state, it hasn't learned to use feedback context.
 
 ### 6. Loss has plateaued
 
