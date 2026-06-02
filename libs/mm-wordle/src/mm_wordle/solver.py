@@ -94,10 +94,7 @@ def play_game_good(env: WordleEnv, target: str, answers: list[str], valid_guesse
     state = env.reset(target_word=target)
     candidates = list(answers)
     while not state.solved and not state.failed:
-        if len(candidates) > 500:
-            guess = random.choice(["slate", "crane", "trace", "crate", "stare"])
-        else:
-            guess = entropy_guess(candidates, valid_guesses)
+        guess = random.choice(candidates) if len(candidates) > 500 else entropy_guess(candidates, valid_guesses)
         state, _ = env.step(state, guess)
         fb = state.guesses[-1].feedback
         candidates = filter_candidates(candidates, guess, fb)
