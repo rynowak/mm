@@ -136,11 +136,13 @@ def sample_constrained(
     next_tokens = torch.multinomial(probs, num_samples=1)
     all_tokens.append(next_tokens)
 
-    for i in range(n_samples):
-        prefixes[i] += tokenizer.decode([int(next_tokens[i].item())])
-
     # Remaining 4 characters: KV cache + GPU mask lookup
     for pos in range(4):
+        # Decode previous tokens in batch (single CPU sync point)
+        token_ids_cpu = all_tokens[-1].cpu().tolist()
+        for i in range(n_samples):
+            prefixes[i] += tokenizer.decode([token_ids_cpu[i][0]])
+
         logits, _, kv_cache = model(next_tokens, kv_cache=kv_cache, start_pos=prompt.size(1) + pos)
         logits = logits[:, -1, :] / temperature
         logits = logits + trie.gpu_mask(prefixes)
@@ -148,8 +150,10 @@ def sample_constrained(
         next_tokens = torch.multinomial(probs, num_samples=1)
         all_tokens.append(next_tokens)
 
-        for i in range(n_samples):
-            prefixes[i] += tokenizer.decode([int(next_tokens[i].item())])
+    # Final decode — single CPU sync
+    token_ids_cpu = all_tokens[-1].cpu().tolist()
+    for i in range(n_samples):
+        prefixes[i] += tokenizer.decode([token_ids_cpu[i][0]])
 
     word_tokens = torch.cat(all_tokens, dim=1)  # (n_samples, 5)
     results: list[tuple[str, Tensor]] = []
