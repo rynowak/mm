@@ -1124,7 +1124,7 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
             snapshot.save(replay_dir / "snapshot.json")
 
         # Step data emission (GRPO visualization, every 100 steps)
-        if algorithm == "grpo" and step % 10 == 0:
+        if algorithm == "grpo":
             viz_target = random.choice(answers)
             step_data = collect_grpo_step_data(
                 model=model,
