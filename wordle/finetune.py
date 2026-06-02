@@ -891,6 +891,8 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
     recent_wins: deque[bool] = deque(maxlen=100)
     recent_guesses: deque[int] = deque(maxlen=100)
     recent_valid: deque[bool] = deque(maxlen=100)
+    recent_info_gain: deque[float] = deque(maxlen=200)
+    recent_candidates_remaining: deque[int] = deque(maxlen=100)
 
     # REINFORCE baseline
     baseline = MovingAverageBaseline(momentum=baseline_momentum)
@@ -1031,6 +1033,19 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
                 for g in replay.guesses:
                     recent_valid.append(g in set(answers))
 
+                for td in turn_details:
+                    chosen_detail = next((gd for gd in td["group"] if gd["guess"] == td["chosen"]), None)
+                    if chosen_detail:
+                        recent_info_gain.append(chosen_detail["actual"])
+                if turn_details:
+                    last_td = turn_details[-1]
+                    last_cd = next((gd for gd in last_td["group"] if gd["guess"] == last_td["chosen"]), None)
+                    if last_cd:
+                        n_before = last_td["candidates"]
+                        actual = last_cd["actual"]
+                        n_after = max(int(n_before / (2**actual)), 1) if actual > 0 else n_before
+                        recent_candidates_remaining.append(n_after)
+
             # Phase 2: Multiple optimization epochs on the same batch (PPO-style)
             # old_log_probs are frozen from sampling; current_log_probs diverge
             # with each gradient step, making clipping active.
@@ -1135,20 +1150,38 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
         if recent_valid:
             valid_word_rate = sum(recent_valid) / len(recent_valid)
             logger.log_scalar("train/valid_word_rate", valid_word_rate, step)
+        if recent_info_gain:
+            logger.log_scalar("train/avg_info_gain", sum(recent_info_gain) / len(recent_info_gain), step)
+        if recent_candidates_remaining:
+            avg_cands = sum(recent_candidates_remaining) / len(recent_candidates_remaining)
+            logger.log_scalar("train/avg_candidates_left", avg_cands, step)
 
         # Print progress
         elapsed = time.time() - t_start
         if step % 10 == 0 or step == 1:
             wr = sum(recent_wins) / max(len(recent_wins), 1)
             ag = sum(recent_guesses) / max(len(recent_guesses), 1)
-            print(
-                f"step {step:>5d}/{max_steps} | "
-                f"loss {last_loss if algorithm == 'grpo' else loss.item():.4f} | "
-                f"win_rate {wr:.2%} | "
-                f"avg_guesses {ag:.1f} | "
-                f"lr {lr:.2e} | "
-                f"elapsed {elapsed:.0f}s"
-            )
+            avg_ig = sum(recent_info_gain) / max(len(recent_info_gain), 1)
+            avg_cr = sum(recent_candidates_remaining) / max(len(recent_candidates_remaining), 1)
+
+            if rl_cfg.curriculum_phase == 1:
+                print(
+                    f"step {step:>5d}/{max_steps} | "
+                    f"loss {last_loss if algorithm == 'grpo' else loss.item():.4f} | "
+                    f"info_gain {avg_ig:.2f} | "
+                    f"candidates_left {avg_cr:.0f} | "
+                    f"lr {lr:.2e} | "
+                    f"elapsed {elapsed:.0f}s"
+                )
+            else:
+                print(
+                    f"step {step:>5d}/{max_steps} | "
+                    f"loss {last_loss if algorithm == 'grpo' else loss.item():.4f} | "
+                    f"win_rate {wr:.2%} | "
+                    f"avg_guesses {ag:.1f} | "
+                    f"lr {lr:.2e} | "
+                    f"elapsed {elapsed:.0f}s"
+                )
 
         # Evaluation
         if step % eval_interval == 0:
