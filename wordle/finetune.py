@@ -339,6 +339,7 @@ def collect_game_experience(
     max_turns: int = 6,
     initial_state: GameState | None = None,
     initial_candidates: list[str] | None = None,
+    solve_bonus: bool = True,
 ) -> tuple[list[TurnExperience], GameReplay, float, list[dict]]:
     """Play a Wordle game and collect experience for GRPO optimization.
 
@@ -376,7 +377,7 @@ def collect_game_experience(
         for guess in guesses:
             sim_state, _ = env.step(state, guess)
             fb = sim_state.guesses[-1].feedback if sim_state.guesses else []
-            r, actual, expected = compute_reward(guess, fb, candidates)
+            r, actual, expected = compute_reward(guess, fb, candidates, solve_bonus=solve_bonus)
             rewards.append(r)
             group_details.append(
                 {
@@ -1022,6 +1023,7 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
                     max_turns=max_game_turns,
                     initial_state=init_state,
                     initial_candidates=init_candidates,
+                    solve_bonus=curriculum_phase != 1,
                 )
                 all_experiences.append(experiences)
                 batch_rewards.append(game_reward)

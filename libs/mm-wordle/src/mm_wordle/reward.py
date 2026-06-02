@@ -84,14 +84,19 @@ def compute_reward(
     guess: str,
     feedback: list[LetterFeedback],
     candidates_before: list[str],
+    solve_bonus: bool = True,
 ) -> tuple[float, float, float]:
     """Compute reward as actual info gain minus expected info gain.
+
+    Args:
+        solve_bonus: If True, award SOLVED_BONUS when puzzle is solved.
+            Set False for Phase 1 curriculum (pure info gain).
 
     Returns (reward, actual_info_gain, expected_info_gain).
     """
     n_before = len(candidates_before)
     if n_before <= 1:
-        if all(f == LetterFeedback.GREEN for f in feedback):
+        if solve_bonus and all(f == LetterFeedback.GREEN for f in feedback):
             return SOLVED_BONUS, SOLVED_BONUS, 0.0
         return 0.0, 0.0, 0.0
 
@@ -99,7 +104,7 @@ def compute_reward(
     n_after = max(len(candidates_after), 1)
     actual = math.log2(n_before / n_after)
 
-    if all(f == LetterFeedback.GREEN for f in feedback):
+    if solve_bonus and all(f == LetterFeedback.GREEN for f in feedback):
         actual = max(actual, SOLVED_BONUS)
 
     expected = expected_info_gain(guess, candidates_before)
