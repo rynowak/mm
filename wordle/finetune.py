@@ -1336,7 +1336,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\n\nInterrupted. Checkpoints saved at last checkpoint interval.")
+    import signal
+
+    signal.signal(signal.SIGINT, lambda *_: (print("\nInterrupted."), exit(0)))
+    main()
