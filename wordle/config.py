@@ -68,7 +68,6 @@ class RLConfig(BaseModel):
     max_eval_games: int = 50
     curriculum_phase: int = 0
     max_turns: int = 6
-    opening_checkpoint: str = ""
 
 
 class FinetuneConfig(BaseModel):

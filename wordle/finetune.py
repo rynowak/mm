@@ -76,6 +76,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Path to fine-tuning checkpoint directory to resume from",
     )
+    parser.add_argument(
+        "--opener",
+        type=str,
+        default=None,
+        help="Path to Phase 1 opener model checkpoint (Phase 2 only)",
+    )
     return parser.parse_args()
 
 
@@ -725,7 +731,12 @@ def _resolve_resume_dir(resume_path: str) -> pathlib.Path:
     return p if p.is_dir() else p.parent
 
 
-def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None = None) -> None:
+def train(
+    config: FinetuneConfig,
+    checkpoint_path: str,
+    resume_path: str | None = None,
+    opener_checkpoint: str | None = None,
+) -> None:
     """Run the RL fine-tuning loop."""
     rl_cfg = config.rl
     seed = rl_cfg.seed
@@ -774,8 +785,8 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
 
     # Load opener model for Phase 2
     opener_model = None
-    if rl_cfg.curriculum_phase == 2 and rl_cfg.opening_checkpoint:
-        opener_path = pathlib.Path(rl_cfg.opening_checkpoint)
+    if rl_cfg.curriculum_phase == 2 and opener_checkpoint:
+        opener_path = pathlib.Path(opener_checkpoint)
         print(f"Loading opener model from {opener_path}")
         opener_model = load_pretrained_model(opener_path, device)
         opener_model.eval()
@@ -1296,7 +1307,7 @@ def main() -> None:
     """Entry point."""
     args = parse_args()
     config = FinetuneConfig.from_yaml(args.config)
-    train(config, checkpoint_path=args.checkpoint, resume_path=args.resume)
+    train(config, checkpoint_path=args.checkpoint, resume_path=args.resume, opener_checkpoint=args.opener)
 
 
 if __name__ == "__main__":

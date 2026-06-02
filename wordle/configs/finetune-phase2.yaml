@@ -19,4 +19,3 @@ rl:
   max_eval_games: 50
   curriculum_phase: 2
   max_turns: 4
-  opening_checkpoint: ""  # set at runtime via --checkpoint
