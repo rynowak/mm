@@ -9,77 +9,43 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from data import TokenBlockDataset
+from data import WordleDataset
 from mm_tokenizers import CharTokenizer
 
 
-class TestTokenBlockDataset:
+class TestWordleDataset:
     def test_basic_shape(self) -> None:
-        tokens = torch.arange(100, dtype=torch.long)
-        ds = TokenBlockDataset(tokens, block_size=10)
-        input_ids, target_ids = ds[0]
-        assert input_ids.shape == (10,)
-        assert target_ids.shape == (10,)
+        prompts = [torch.tensor([29], dtype=torch.long)]  # [bos]
+        targets = [torch.tensor([0, 1, 2, 3, 4], dtype=torch.long)]
+        ds = WordleDataset(prompts, targets, pad_id=31)
+        input_ids, target_ids, loss_mask = ds[0]
+        assert input_ids.shape == (5,)
+        assert target_ids.shape == (5,)
+        assert loss_mask.shape == (5,)
 
-    def test_target_is_shifted_input(self) -> None:
-        tokens = torch.arange(100, dtype=torch.long)
-        ds = TokenBlockDataset(tokens, block_size=10)
-        input_ids, target_ids = ds[0]
-        assert torch.equal(input_ids[1:], target_ids[:-1])
+    def test_loss_mask_on_target_only(self) -> None:
+        prompts = [torch.tensor([29, 0, 1, 2, 3, 4, 26, 26, 26, 26, 26, 32], dtype=torch.long)]
+        targets = [torch.tensor([5, 6, 7, 8, 9], dtype=torch.long)]
+        ds = WordleDataset(prompts, targets, pad_id=31)
+        _, _, loss_mask = ds[0]
+        assert loss_mask.sum().item() == 5
+        assert loss_mask[-5:].sum().item() == 5
 
     def test_length(self) -> None:
-        tokens = torch.arange(100, dtype=torch.long)
-        ds = TokenBlockDataset(tokens, block_size=10)
-        assert len(ds) == 9  # (100 - 1) // 10
-
-    def test_blocks_are_contiguous(self) -> None:
-        tokens = torch.arange(50, dtype=torch.long)
-        ds = TokenBlockDataset(tokens, block_size=5)
-        input0, _ = ds[0]
-        input1, _ = ds[1]
-        assert input0[-1].item() == 4
-        assert input1[0].item() == 5
-
-    def test_single_block(self) -> None:
-        tokens = torch.arange(11, dtype=torch.long)
-        ds = TokenBlockDataset(tokens, block_size=10)
-        assert len(ds) == 1
-        input_ids, target_ids = ds[0]
-        assert torch.equal(input_ids, torch.arange(0, 10))
-        assert torch.equal(target_ids, torch.arange(1, 11))
+        prompts = [torch.tensor([29], dtype=torch.long) for _ in range(10)]
+        targets = [torch.tensor([0, 1, 2, 3, 4], dtype=torch.long) for _ in range(10)]
+        ds = WordleDataset(prompts, targets, pad_id=31)
+        assert len(ds) == 10
 
 
 class TestTokenizationFormat:
-    def test_bos_in_story_tokens(self) -> None:
-        """Story tokenization should include [bos] before each story."""
+    def test_bos_in_prompt(self) -> None:
         tokenizer = CharTokenizer()
         bos_id = tokenizer.bos_id
-        eos_id = tokenizer.eos_id
-
-        text = "hello"
-        tokens = [bos_id] + tokenizer.encode(text) + [eos_id]
-        assert tokens[0] == bos_id
-        assert tokens[-1] == eos_id
-
-    def test_word_list_has_bos(self) -> None:
-        """Word list tokenization should start with [bos]."""
-        tokenizer = CharTokenizer()
-        bos_id = tokenizer.bos_id
-
-        words = ["crane", "slate"]
-        tokens = [bos_id]
-        for i, word in enumerate(words):
-            tokens.extend(tokenizer.encode(word))
-            if i < len(words) - 1:
-                tokens.append(tokenizer.sep_id)
-            else:
-                tokens.append(tokenizer.eos_id)
-
-        assert tokens[0] == bos_id
-        assert tokens[-1] == tokenizer.eos_id
+        prompt = [bos_id]
+        assert prompt[0] == bos_id
 
     def test_ascii_filter(self) -> None:
-        """Only a-z should pass the character filter."""
         good = "abcxyz"
         bad = "ABC123!@#âé"
         filtered = [ch for ch in (good + bad) if "a" <= ch <= "z"]

@@ -31,15 +31,8 @@ def _board_html(replay: GameReplay) -> str:
     rows: list[str] = []
     for guess, fb in zip(replay.guesses, replay.feedback, strict=True):
         tiles = "".join(_tile_html(guess[i], fb[i]) for i in range(word_len))
-        rows.append(
-            f'<div style="display:grid;grid-template-columns:'
-            f"repeat({word_len},28px);gap:2px;\">{tiles}</div>"
-        )
-    return (
-        '<div style="display:flex;flex-direction:column;gap:2px;">'
-        + "\n".join(rows)
-        + "</div>"
-    )
+        rows.append(f'<div style="display:grid;grid-template-columns:repeat({word_len},28px);gap:2px;">{tiles}</div>')
+    return '<div style="display:flex;flex-direction:column;gap:2px;">' + "\n".join(rows) + "</div>"
 
 
 def render_game_html(replay: GameReplay) -> str:

@@ -161,7 +161,7 @@ def sample_constrained(
 
         for i in range(n_samples):
             try:
-                ch = tokenizer.decode([next_tokens[i].item()])
+                ch = tokenizer.decode([int(next_tokens[i].item())])
                 prefixes[i] += ch
             except ValueError:
                 prefixes[i] += "?"
@@ -417,7 +417,7 @@ def collect_game_experience(
             )
         )
 
-        best_idx = rewards_tensor.argmax().item()
+        best_idx = int(rewards_tensor.argmax().item())
         chosen_guess = guesses[best_idx]
         total_reward += rewards[best_idx]
 
@@ -474,7 +474,7 @@ def _apply_trie_masks(
                 masked[i, pos] = masked[i, pos] + mask
 
             try:
-                ch = tokenizer.decode([word_ids_batch[i, pos].item()])
+                ch = tokenizer.decode([int(word_ids_batch[i, pos].item())])
                 prefix += ch
             except ValueError:
                 prefix += "?"
@@ -1115,6 +1115,7 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
                 env=env,
                 eval_words=eval_words,
                 tokenizer=tokenizer,
+                answers=answers,
                 trie=word_trie,
                 device=device,
                 constrained=constrained,

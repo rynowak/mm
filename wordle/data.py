@@ -47,8 +47,8 @@ class WordleDataset(Dataset):
     def __len__(self) -> int:
         return len(self.examples)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        return self.examples[idx]
+    def __getitem__(self, index):
+        return self.examples[index]
 
 
 def collate_wordle(batch: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]], pad_id: int):

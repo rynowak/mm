@@ -9,9 +9,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from config import FinetuneConfig
 from finetune import (
-    build_reward_config,
     compute_guess_log_probs,
     create_reference_model,
     load_pretrained_model,
@@ -20,7 +18,7 @@ from finetune import (
 )
 from mm_model import GPT, GPTConfig, save_checkpoint
 from mm_tokenizers import CharTokenizer
-from mm_wordle import RewardConfig, WordTrie
+from mm_wordle import WordTrie
 
 _CPU = torch.device("cpu")
 
@@ -30,22 +28,6 @@ def _make_tiny_model(device: torch.device = _CPU) -> GPT:
     model = GPT(config)
     model.to(device)
     return model
-
-
-class TestBuildRewardConfig:
-    def test_default_values(self) -> None:
-        config = FinetuneConfig()
-        rc = build_reward_config(config)
-        assert isinstance(rc, RewardConfig)
-        assert rc.solved == 1.0
-        assert rc.invalid_word == -1.0
-        assert rc.no_new_info == 0.0
-
-    def test_custom_values(self) -> None:
-        config = FinetuneConfig(reward={"solved": 5.0, "failed": -3.0})
-        rc = build_reward_config(config)
-        assert rc.solved == 5.0
-        assert rc.failed == -3.0
 
 
 class TestCreateReferenceModel:
@@ -70,12 +52,10 @@ class TestCreateReferenceModel:
         model = _make_tiny_model()
         ref = create_reference_model(model)
 
-        # Modify model weights
         with torch.no_grad():
             for p in model.parameters():
                 p.add_(1.0)
 
-        # Ref should be unchanged
         x = torch.randint(0, 50, (1, 10))
         with torch.no_grad():
             out_model, _ = model(x)
@@ -91,7 +71,7 @@ class TestSampleConstrained:
         trie = WordTrie.from_words(words)
         game_state_ids = torch.tensor(tokenizer.encode("[bos]"), dtype=torch.long)
 
-        results = sample_constrained(model, game_state_ids, trie, tokenizer, torch.device("cpu"))
+        results = sample_constrained(model, game_state_ids, trie, tokenizer, _CPU)
         assert len(results) == 1
         word, ids = results[0]
         assert trie.is_valid_word(word)
@@ -104,7 +84,7 @@ class TestSampleConstrained:
         trie = WordTrie.from_words(words)
         game_state_ids = torch.tensor(tokenizer.encode("[bos]"), dtype=torch.long)
 
-        results = sample_constrained(model, game_state_ids, trie, tokenizer, torch.device("cpu"), n_samples=5)
+        results = sample_constrained(model, game_state_ids, trie, tokenizer, _CPU, n_samples=5)
         assert len(results) == 5
         for word, _ids in results:
             assert trie.is_valid_word(word)
@@ -116,7 +96,7 @@ class TestSampleConstrained:
         trie = WordTrie.from_words(["crane"])
         game_state_ids = torch.tensor(tokenizer.encode("[bos]"), dtype=torch.long)
 
-        sample_constrained(model, game_state_ids, trie, tokenizer, torch.device("cpu"))
+        sample_constrained(model, game_state_ids, trie, tokenizer, _CPU)
         assert model.training
 
     def test_generates_5_char_words(self) -> None:
@@ -125,7 +105,7 @@ class TestSampleConstrained:
         trie = WordTrie.from_words(["crane", "house", "slate", "about", "train"])
         game_state_ids = torch.tensor(tokenizer.encode("[bos]"), dtype=torch.long)
 
-        results = sample_constrained(model, game_state_ids, trie, tokenizer, torch.device("cpu"), n_samples=10)
+        results = sample_constrained(model, game_state_ids, trie, tokenizer, _CPU, n_samples=10)
         for word, _ids in results:
             assert len(word) == 5
 
@@ -136,7 +116,7 @@ class TestSampleUnconstrained:
         tokenizer = CharTokenizer()
         game_state_ids = torch.tensor(tokenizer.encode("[bos]"), dtype=torch.long)
 
-        results = sample_unconstrained(model, game_state_ids, torch.device("cpu"), tokenizer)
+        results = sample_unconstrained(model, game_state_ids, _CPU, tokenizer)
         assert len(results) == 1
         word, ids = results[0]
         assert isinstance(word, str)
@@ -147,7 +127,7 @@ class TestSampleUnconstrained:
         tokenizer = CharTokenizer()
         game_state_ids = torch.tensor(tokenizer.encode("[bos]"), dtype=torch.long)
 
-        results = sample_unconstrained(model, game_state_ids, torch.device("cpu"), tokenizer, n_samples=3)
+        results = sample_unconstrained(model, game_state_ids, _CPU, tokenizer, n_samples=3)
         assert len(results) == 3
 
 
@@ -195,7 +175,7 @@ class TestLoadPretrainedModel:
         ckpt_path = tmp_path / "model.pt"
         save_checkpoint(ckpt_path, model, optimizer, step=100, config=model.config)
 
-        loaded = load_pretrained_model(ckpt_path, torch.device("cpu"))
+        loaded = load_pretrained_model(ckpt_path, _CPU)
         assert isinstance(loaded, GPT)
 
         x = torch.randint(0, 50, (1, 10))

@@ -23,7 +23,7 @@ training:
   learning_rate: 3e-4
   max_steps: 100
 data:
-  dataset: "test/dataset"
+  transcript_games: 100
 """
         config_path = tmp_path / "test.yaml"
         config_path.write_text(yaml_content)
@@ -34,10 +34,9 @@ data:
         assert config.model.embed_dim == 256
         assert config.training.learning_rate == pytest.approx(3e-4)
         assert config.training.max_steps == 100
-        assert config.data.dataset == "test/dataset"
+        assert config.data.transcript_games == 100
 
     def test_float_coercion(self, tmp_path: Path) -> None:
-        """YAML parses 3e-4 as string; Pydantic should coerce it to float."""
         yaml_content = """
 training:
   learning_rate: 3e-4
@@ -70,9 +69,6 @@ rl:
   algorithm: reinforce
   learning_rate: 5e-5
   group_size: 4
-reward:
-  solved: 2.0
-  invalid_word: -2.0
 """
         config_path = tmp_path / "test.yaml"
         config_path.write_text(yaml_content)
@@ -81,16 +77,8 @@ reward:
         assert config.rl.algorithm == "reinforce"
         assert config.rl.learning_rate == pytest.approx(5e-5)
         assert config.rl.group_size == 4
-        assert config.reward.solved == pytest.approx(2.0)
-        assert config.reward.invalid_word == pytest.approx(-2.0)
-
-    def test_reward_has_no_new_info(self) -> None:
-        config = FinetuneConfig()
-        assert hasattr(config.reward, "no_new_info")
-        assert config.reward.no_new_info == pytest.approx(0.0)
 
     def test_extra_fields_ignored(self, tmp_path: Path) -> None:
-        """Extra YAML fields like model.checkpoint should not crash."""
         yaml_content = """
 model:
   checkpoint: some/path

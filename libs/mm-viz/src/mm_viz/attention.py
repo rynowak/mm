@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import math
 from html import escape
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 import torch
 import torch.nn.functional as F
@@ -29,11 +33,11 @@ def extract_attention_weights(
     input_ids = input_ids.to(device)
     model.eval()
 
-    attention_maps: list[Tensor] = []
-    hooks: list[torch.utils.hooks.RemovableHook] = []
+    attention_maps: list[list[Tensor]] = []
+    hooks: list[torch.utils.hooks.RemovableHandle] = []
 
-    def _make_hook(layer_store: list[Tensor]) -> object:
-        def hook_fn(module: CausalSelfAttention, args: tuple, output: Tensor) -> None:
+    def _make_hook(layer_store: list[Tensor]) -> Callable[[Any, tuple[Any, ...], Any], None]:
+        def hook_fn(module: Any, args: tuple[Any, ...], output: Any) -> None:
             # Re-compute Q, K from the input to this module
             x = args[0]
             b, t, c = x.size()
@@ -64,7 +68,7 @@ def extract_attention_weights(
     for module in model.modules():
         if isinstance(module, CausalSelfAttention):
             store: list[Tensor] = []
-            attention_maps.append(store)  # type: ignore[arg-type]
+            attention_maps.append(store)
             hook = module.register_forward_hook(_make_hook(store))
             hooks.append(hook)
 

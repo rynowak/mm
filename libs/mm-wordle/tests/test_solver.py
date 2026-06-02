@@ -3,7 +3,7 @@
 from mm_tokenizers import CharTokenizer
 from mm_wordle.game import LetterFeedback, WordleEnv
 from mm_wordle.solver import filter_candidates, play_game_decent, play_game_good, play_game_random
-from mm_wordle.transcripts import generate_transcripts
+from mm_wordle.transcripts import generate_examples
 from mm_wordle.words import load_answers
 
 
@@ -55,19 +55,20 @@ class TestSolvers:
 
 
 class TestTranscripts:
-    def test_generates_tokens(self) -> None:
+    def test_generates_examples(self) -> None:
         tokenizer = CharTokenizer()
-        tokens = generate_transcripts(tokenizer, n_games=10)
-        assert len(tokens) > 0
+        examples = generate_examples(tokenizer, n_games=10)
+        assert len(examples) > 0
 
-    def test_contains_feedback_tokens(self) -> None:
+    def test_examples_have_prompt_and_target(self) -> None:
         tokenizer = CharTokenizer()
-        tokens = generate_transcripts(tokenizer, n_games=10)
-        assert tokenizer.green_id in tokens
-        assert tokenizer.gray_id in tokens
+        examples = generate_examples(tokenizer, n_games=5)
+        for ex in examples:
+            assert len(ex.prompt_ids) >= 1
+            assert len(ex.target_ids) == 5
 
-    def test_contains_bos_eos(self) -> None:
+    def test_prompt_starts_with_bos(self) -> None:
         tokenizer = CharTokenizer()
-        tokens = generate_transcripts(tokenizer, n_games=5)
-        assert tokenizer.bos_id in tokens
-        assert tokenizer.eos_id in tokens
+        examples = generate_examples(tokenizer, n_games=5)
+        for ex in examples:
+            assert ex.prompt_ids[0] == tokenizer.bos_id

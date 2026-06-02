@@ -74,14 +74,20 @@ ML training playground for pre-training and reinforcement learning. Sample/refer
 
 Bootstrap: `uv sync`
 
-## PR Quality Checklist
+## Quality Gates
+
+All code quality checks are run through the Makefile. This is the single way to work with the code.
 
 ```bash
-# When CI is set up, this will be the gate command:
-uv run ruff check .
-uv run ruff format --check .
-uv run pytest
+make check    # Run all gates: lint, format, typecheck, test
+make lint     # ruff check
+make format   # ruff format --check
+make typecheck # ty check
+make test     # pytest
+make fix      # Auto-fix lint + format issues
 ```
+
+**Before committing:** `make check` must pass. No exceptions.
 
 ## Testing Guardrails
 

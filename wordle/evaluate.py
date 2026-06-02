@@ -114,7 +114,7 @@ def generate_guess_constrained(
         idx = torch.cat([idx, next_token], dim=1)
 
         try:
-            ch = tokenizer.decode([next_token.item()])
+            ch = tokenizer.decode([int(next_token.item())])
             prefix += ch
         except ValueError:
             prefix += "?"
