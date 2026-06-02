@@ -40,10 +40,8 @@ from mm_training import (
 )
 from mm_viz import EvalSnapshot, GameReplay, GRPOStepData
 from mm_wordle import (
-    RewardConfig,
     WordleEnv,
     WordTrie,
-    all_valid_words,
     compute_reward,
     game_state_to_prompt,
     load_answers,
@@ -103,27 +101,6 @@ def create_reference_model(model: GPT) -> GPT:
         param.requires_grad = False
     ref_model.eval()
     return ref_model
-
-
-# ---------------------------------------------------------------------------
-# Reward config
-# ---------------------------------------------------------------------------
-
-
-def build_reward_config(config: FinetuneConfig) -> RewardConfig:
-    """Build a RewardConfig from the parsed config."""
-    rc = config.reward
-    return RewardConfig(
-        invalid_word=rc.invalid_word,
-        repeated_guess=rc.repeated_guess,
-        contradicts_clues=rc.contradicts_clues,
-        no_new_info=rc.no_new_info,
-        green_letter=rc.green_letter,
-        yellow_letter=rc.yellow_letter,
-        elimination_weight=rc.elimination_weight,
-        solved=rc.solved,
-        failed=rc.failed,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -294,8 +271,6 @@ def play_game_reinforce(
     env: WordleEnv,
     target_word: str,
     tokenizer: CharTokenizer,
-    reward_config: RewardConfig,
-    valid_words: set[str],
     answers: list[str],
     trie: WordTrie,
     device: torch.device,
@@ -326,7 +301,7 @@ def play_game_reinforce(
         new_state, _done = env.step(state, guess)
         feedback = new_state.guesses[-1].feedback if new_state.guesses else []
 
-        reward = compute_reward(new_state, guess, feedback, valid_words, reward_config, candidates_before=candidates)
+        reward = compute_reward(guess, feedback, candidates)
         turn_rewards.append(reward)
 
         candidates = filter_candidates(candidates, guess, feedback)
@@ -365,8 +340,6 @@ def collect_game_experience(
     env: WordleEnv,
     target_word: str,
     tokenizer: CharTokenizer,
-    reward_config: RewardConfig,
-    valid_words: set[str],
     answers: list[str],
     trie: WordTrie,
     device: torch.device,
@@ -398,7 +371,7 @@ def collect_game_experience(
         for guess in guesses:
             sim_state, _ = env.step(state, guess)
             fb = sim_state.guesses[-1].feedback if sim_state.guesses else []
-            r = compute_reward(sim_state, guess, fb, valid_words, reward_config, candidates_before=candidates)
+            r = compute_reward(guess, fb, candidates)
             rewards.append(r)
         rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=device)
 
@@ -550,8 +523,6 @@ def collect_grpo_step_data(
     env: WordleEnv,
     target_word: str,
     tokenizer: CharTokenizer,
-    reward_config: RewardConfig,
-    valid_words: set[str],
     answers: list[str],
     trie: WordTrie,
     device: torch.device,
@@ -584,7 +555,7 @@ def collect_grpo_step_data(
     for guess in guesses:
         sim_state, _ = env.step(state, guess)
         fb = sim_state.guesses[-1].feedback if sim_state.guesses else []
-        r = compute_reward(sim_state, guess, fb, valid_words, reward_config, candidates_before=answers)
+        r = compute_reward(guess, fb, list(answers))
         rewards.append(r)
         # Build a simple breakdown
         reward_breakdowns.append({"total": r})
@@ -648,8 +619,7 @@ def evaluate_games(
     env: WordleEnv,
     eval_words: list[str],
     tokenizer: CharTokenizer,
-    reward_config: RewardConfig,
-    valid_words: set[str],
+    answers: list[str],
     trie: WordTrie,
     device: torch.device,
     constrained: bool,
@@ -730,6 +700,8 @@ def evaluate_games(
 
 def build_word_trie(action_space: str) -> WordTrie:
     """Build a trie for constrained decoding."""
+    from mm_wordle import all_valid_words
+
     words = load_answers() if action_space == "answers" else sorted(all_valid_words())
     return WordTrie.from_words(words)
 
@@ -826,11 +798,8 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
         print(f"Resumed at step {start_step}")
 
     # Reward config
-    reward_config = build_reward_config(config)
-
     # Game environment
     env = WordleEnv()
-    valid_words = all_valid_words()
     answers = load_answers()
 
     # Build trie for constrained decoding
@@ -922,8 +891,6 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
                     env=env,
                     target_word=target,
                     tokenizer=tokenizer,
-                    reward_config=reward_config,
-                    valid_words=valid_words,
                     answers=answers,
                     trie=word_trie,
                     device=device,
@@ -943,7 +910,7 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
                 recent_wins.append(replay.solved)
                 recent_guesses.append(replay.turns)
                 for g in replay.guesses:
-                    recent_valid.append(g in valid_words)
+                    recent_valid.append(g in set(answers))
 
             # Pad log probs to same length for batching
             max_len = max(lp.shape[0] for lp in all_log_probs)
@@ -994,8 +961,6 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
                     env=env,
                     target_word=target,
                     tokenizer=tokenizer,
-                    reward_config=reward_config,
-                    valid_words=valid_words,
                     answers=answers,
                     trie=word_trie,
                     device=device,
@@ -1009,7 +974,7 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
                 recent_wins.append(replay.solved)
                 recent_guesses.append(replay.turns)
                 for g in replay.guesses:
-                    recent_valid.append(g in valid_words)
+                    recent_valid.append(g in set(answers))
 
             # Phase 2: Multiple optimization epochs on the same batch (PPO-style)
             # old_log_probs are frozen from sampling; current_log_probs diverge
@@ -1124,8 +1089,6 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
                 env=env,
                 eval_words=eval_words,
                 tokenizer=tokenizer,
-                reward_config=reward_config,
-                valid_words=valid_words,
                 trie=word_trie,
                 device=device,
                 constrained=constrained,
@@ -1159,8 +1122,6 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
                 env=env,
                 target_word=viz_target,
                 tokenizer=tokenizer,
-                reward_config=reward_config,
-                valid_words=valid_words,
                 answers=answers,
                 trie=word_trie,
                 device=device,
@@ -1210,8 +1171,7 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
         env=env,
         eval_words=eval_words,
         tokenizer=tokenizer,
-        reward_config=reward_config,
-        valid_words=valid_words,
+        answers=answers,
         trie=word_trie,
         device=device,
         constrained=constrained,

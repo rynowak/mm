@@ -68,22 +68,9 @@ class RLConfig(BaseModel):
     max_eval_games: int = 50
 
 
-class RewardModelConfig(BaseModel):
-    invalid_word: float = -1.0
-    repeated_guess: float = -0.5
-    contradicts_clues: float = -0.3
-    no_new_info: float = 0.0
-    green_letter: float = 0.2
-    yellow_letter: float = 0.1
-    elimination_weight: float = 1.0
-    solved: float = 10.0
-    failed: float = -0.5
-
-
 class FinetuneConfig(BaseModel):
     model: ModelConfig = ModelConfig()
     rl: RLConfig = RLConfig()
-    reward: RewardModelConfig = RewardModelConfig()
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> FinetuneConfig:

@@ -1,7 +1,7 @@
 rl:
-  algorithm: "grpo"  # "reinforce" or "grpo"
-  decoding: "constrained"  # "constrained" or "unconstrained"
-  action_space: "answers"  # "answers" (~2,300 words) or "all" (~13K)
+  algorithm: "grpo"
+  decoding: "constrained"
+  action_space: "answers"
   seed: 42
   learning_rate: 1e-5
   weight_decay: 0.01
@@ -10,26 +10,10 @@ rl:
   grad_clip: 1.0
   eval_interval: 100
   checkpoint_interval: 100
-
-  # GRPO-specific
   group_size: 4
   clip_epsilon: 0.2
   kl_beta: 0.2
   ppo_epochs: 2
-
-  # REINFORCE-specific
   baseline_momentum: 0.99
-
-  # Game settings
-  batch_size: 8  # games per batch
-  max_eval_games: 50  # fixed evaluation set size
-
-reward:
-  invalid_word: -1.0
-  repeated_guess: -0.5
-  contradicts_clues: -0.3
-  green_letter: 0.2
-  yellow_letter: 0.1
-  elimination_weight: 1.0
-  solved: 10.0
-  failed: -0.5
+  batch_size: 8
+  max_eval_games: 50
