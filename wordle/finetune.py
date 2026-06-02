@@ -301,7 +301,7 @@ def play_game_reinforce(
         new_state, _done = env.step(state, guess)
         feedback = new_state.guesses[-1].feedback if new_state.guesses else []
 
-        reward = compute_reward(guess, feedback, candidates)
+        reward, _, _ = compute_reward(guess, feedback, candidates)
         turn_rewards.append(reward)
 
         candidates = filter_candidates(candidates, guess, feedback)
@@ -371,7 +371,7 @@ def collect_game_experience(
         for guess in guesses:
             sim_state, _ = env.step(state, guess)
             fb = sim_state.guesses[-1].feedback if sim_state.guesses else []
-            r = compute_reward(guess, fb, candidates)
+            r, _, _ = compute_reward(guess, fb, candidates)
             rewards.append(r)
         rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=device)
 
@@ -555,7 +555,7 @@ def collect_grpo_step_data(
     for guess in guesses:
         sim_state, _ = env.step(state, guess)
         fb = sim_state.guesses[-1].feedback if sim_state.guesses else []
-        r = compute_reward(guess, fb, list(answers))
+        r, _, _ = compute_reward(guess, fb, list(answers))
         rewards.append(r)
         # Build a simple breakdown
         reward_breakdowns.append({"total": r})
