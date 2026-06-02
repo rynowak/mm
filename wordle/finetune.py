@@ -70,6 +70,12 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Path to pre-trained model checkpoint (.pt file)",
     )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to fine-tuning checkpoint directory to resume from",
+    )
     return parser.parse_args()
 
 
@@ -685,7 +691,12 @@ def build_word_trie(action_space: str) -> WordTrie:
 # ---------------------------------------------------------------------------
 
 
-def train(config: FinetuneConfig, checkpoint_path: str) -> None:
+def _resolve_resume_dir(resume_path: str) -> pathlib.Path:
+    p = pathlib.Path(resume_path)
+    return p if p.is_dir() else p.parent
+
+
+def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None = None) -> None:
     """Run the RL fine-tuning loop."""
     rl_cfg = config.rl
     seed = rl_cfg.seed
@@ -695,20 +706,43 @@ def train(config: FinetuneConfig, checkpoint_path: str) -> None:
 
     tokenizer = CharTokenizer()
 
-    # Load pre-trained model
-    ckpt_path = pathlib.Path(checkpoint_path)
-    print(f"Loading pre-trained model from {ckpt_path}")
-    model = load_pretrained_model(ckpt_path, device)
-    param_count = sum(p.numel() for p in model.parameters())
-    print(f"Model: {param_count:,} parameters")
-
-    # Create reference model (frozen copy for KL penalty)
-    ref_model = create_reference_model(model)
-    print("Created frozen reference model")
-
     # Algorithm and decoding mode
     algorithm = rl_cfg.algorithm
     constrained = rl_cfg.decoding == "constrained"
+
+    # Load model — either from resume checkpoint or pre-trained checkpoint
+    start_step = 0
+    if resume_path is not None:
+        resume_dir = pathlib.Path(resume_path)
+        ckpt_file = resume_dir / "model.pt" if resume_dir.is_dir() else resume_dir
+        print(f"Resuming from {ckpt_file}")
+        model = load_pretrained_model(ckpt_file, device)
+    else:
+        ckpt_path = pathlib.Path(checkpoint_path)
+        print(f"Loading pre-trained model from {ckpt_path}")
+        model = load_pretrained_model(ckpt_path, device)
+
+    param_count = sum(p.numel() for p in model.parameters())
+    print(f"Model: {param_count:,} parameters")
+
+    # Create or load reference model
+    if resume_path is not None:
+        resume_dir = _resolve_resume_dir(resume_path)
+        ref_path = resume_dir / "ref_model.pt"
+        if ref_path.exists():
+            ref_model = copy.deepcopy(model)
+            ref_model.load_state_dict(torch.load(ref_path, map_location=device, weights_only=True))
+            for param in ref_model.parameters():
+                param.requires_grad = False
+            ref_model.eval()
+            print("Loaded frozen reference model from checkpoint")
+        else:
+            ref_model = create_reference_model(model)
+            print("Created frozen reference model (no ref checkpoint found)")
+    else:
+        ref_model = create_reference_model(model)
+        print("Created frozen reference model")
+
     print(f"Algorithm: {algorithm}, Decoding: {rl_cfg.decoding}")
 
     # Optimizer and scheduler
@@ -723,6 +757,26 @@ def train(config: FinetuneConfig, checkpoint_path: str) -> None:
         total_steps=rl_cfg.max_steps,
     )
 
+    # Restore optimizer, step, and RNG state on resume
+    if resume_path is not None:
+        resume_dir = _resolve_resume_dir(resume_path)
+        ckpt_file = resume_dir / "model.pt"
+        checkpoint = load_checkpoint(ckpt_file, device)
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        start_step = checkpoint["step"]
+        rng = checkpoint.get("rng_states", {})
+        if "torch" in rng:
+            torch.set_rng_state(rng["torch"].cpu())
+        if "random" in rng:
+            random.setstate(rng["random"])
+        if "numpy" in rng:
+            import numpy as np
+
+            np.random.set_state(rng["numpy"])
+        for _ in range(start_step):
+            scheduler.step()
+        print(f"Resumed at step {start_step}")
+
     # Reward config
     reward_config = build_reward_config(config)
 
@@ -736,27 +790,44 @@ def train(config: FinetuneConfig, checkpoint_path: str) -> None:
     word_trie = build_word_trie(rl_cfg.action_space)
     print(f"  Action space: {rl_cfg.action_space}")
 
-    # Fixed evaluation set
+    # Fixed evaluation set — reuse from previous run on resume
     max_eval_games = rl_cfg.max_eval_games
-    eval_words = random.sample(answers, min(max_eval_games, len(answers)))
-    print(f"Fixed evaluation set: {len(eval_words)} words")
+    if resume_path is not None:
+        resume_dir = _resolve_resume_dir(resume_path)
+        prev_eval_path = resume_dir.parent / "eval_words.json"
+        if prev_eval_path.exists():
+            eval_words = json.loads(prev_eval_path.read_text())
+            print(f"Loaded evaluation set from {prev_eval_path}: {len(eval_words)} words")
+        else:
+            eval_words = random.sample(answers, min(max_eval_games, len(answers)))
+            print(f"Fixed evaluation set: {len(eval_words)} words")
+    else:
+        eval_words = random.sample(answers, min(max_eval_games, len(answers)))
+        print(f"Fixed evaluation set: {len(eval_words)} words")
 
-    # Metrics logger
-    logger = MetricsLogger(experiment=f"finetune-{algorithm}")
+    # Metrics logger — reuse directory on resume
+    if resume_path is not None:
+        resume_dir = _resolve_resume_dir(resume_path)
+        logger = MetricsLogger(experiment=f"finetune-{algorithm}", run_dir=resume_dir.parent)
+    else:
+        logger = MetricsLogger(experiment=f"finetune-{algorithm}")
     print(f"Logging to {logger.log_dir}")
 
     # Save evaluation words for reproducibility
     eval_words_path = logger.log_dir / "eval_words.json"
-    eval_words_path.write_text(json.dumps(eval_words, indent=2))
+    if not eval_words_path.exists():
+        eval_words_path.write_text(json.dumps(eval_words, indent=2))
 
-    # Run manifest
-    manifest = RunManifest.capture(
-        experiment=f"finetune-{algorithm}",
-        config=config.model_dump(),
-        seed=seed,
-        dataset_id="wordle-answers",
-    )
-    manifest.save(logger.log_dir / "manifest.json")
+    # Run manifest (only on fresh runs)
+    manifest_path = logger.log_dir / "manifest.json"
+    if not manifest_path.exists():
+        manifest = RunManifest.capture(
+            experiment=f"finetune-{algorithm}",
+            config=config.model_dump(),
+            seed=seed,
+            dataset_id="wordle-answers",
+        )
+        manifest.save(manifest_path)
 
     # Training state
     max_steps = rl_cfg.max_steps
@@ -780,7 +851,7 @@ def train(config: FinetuneConfig, checkpoint_path: str) -> None:
     model.train()
     t_start = time.time()
 
-    print(f"\nStarting RL fine-tuning from step 1 to {max_steps}")
+    print(f"\nStarting RL fine-tuning from step {start_step + 1} to {max_steps}")
     print(f"  Algorithm: {algorithm}")
     print(f"  Decoding: {'constrained' if constrained else 'unconstrained'}")
     print(f"  Batch size: {batch_size}")
@@ -788,7 +859,7 @@ def train(config: FinetuneConfig, checkpoint_path: str) -> None:
         print(f"  Group size: {group_size}")
     print()
 
-    for step in range(1, max_steps + 1):
+    for step in range(start_step + 1, max_steps + 1):
         # Sample batch_size random target words
         batch_targets = random.choices(answers, k=batch_size)
 
@@ -1080,7 +1151,7 @@ def main() -> None:
     """Entry point."""
     args = parse_args()
     config = FinetuneConfig.from_yaml(args.config)
-    train(config, checkpoint_path=args.checkpoint)
+    train(config, checkpoint_path=args.checkpoint, resume_path=args.resume)
 
 
 if __name__ == "__main__":
