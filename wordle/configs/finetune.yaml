@@ -31,5 +31,5 @@ reward:
   green_letter: 0.2
   yellow_letter: 0.1
   elimination_weight: 1.0
-  solved: 2.0
+  solved: 10.0
   failed: -0.5

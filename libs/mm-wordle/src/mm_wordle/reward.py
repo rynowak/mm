@@ -1,5 +1,6 @@
 """Reward function for Wordle RL training."""
 
+import math
 from dataclasses import dataclass
 
 from mm_wordle.game import GameState, GuessFeedback, LetterFeedback
@@ -15,7 +16,7 @@ class RewardConfig:
     green_letter: float = 0.2
     yellow_letter: float = 0.1
     elimination_weight: float = 1.0
-    solved: float = 2.0
+    solved: float = 10.0
     failed: float = -0.5
 
 
@@ -72,13 +73,13 @@ def compute_reward(
         elif fb == LetterFeedback.YELLOW:
             reward += config.yellow_letter
 
-    # Information-theoretic elimination reward
+    # Information gain in bits: log2(candidates_before / candidates_after)
     if candidates_before is not None and len(candidates_before) > 1:
         candidates_after = filter_candidates(candidates_before, guess, feedback)
         n_before = len(candidates_before)
         n_after = max(len(candidates_after), 1)
-        elimination_rate = 1.0 - (n_after / n_before)
-        reward += config.elimination_weight * elimination_rate
+        info_bits = math.log2(n_before / n_after)
+        reward += config.elimination_weight * info_bits
 
     if reward == 0.0:
         return config.no_new_info
