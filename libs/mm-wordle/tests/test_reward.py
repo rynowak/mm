@@ -51,11 +51,18 @@ class TestComputeReward:
         assert isinstance(actual, float)
         assert isinstance(expected, float)
 
-    def test_single_candidate_returns_zero(self) -> None:
+    def test_single_candidate_solved_gets_bonus(self) -> None:
         reward, actual, expected = compute_reward("crane", [LetterFeedback.GREEN] * 5, ["crane"])
-        assert reward == 0.0
-        assert actual == 0.0
+        assert reward > 10.0
+        assert actual > 10.0
         assert expected == 0.0
+
+    def test_single_candidate_wrong_guess_zero(self) -> None:
+        from mm_wordle.game import WordleEnv
+
+        fb = WordleEnv.compute_feedback("slate", "crane")
+        reward, actual, expected = compute_reward("slate", fb, ["crane"])
+        assert reward == 0.0
 
     def test_reward_equals_actual_minus_expected(self) -> None:
         env = WordleEnv()

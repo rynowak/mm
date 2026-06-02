@@ -1,11 +1,8 @@
 """Reward function for Wordle RL training.
 
-Reward = actual_info_gain - expected_info_gain
+Reward = actual_info_gain - expected_info_gain, with a solve bonus.
 
-This normalizes by the expected value, so the reward reflects decision
-quality rather than outcome luck. A guess that's good at splitting
-candidates scores positive even with unlucky feedback. A lazy guess
-scores negative even with lucky feedback.
+See docs/reward-function.md for the full design.
 """
 
 from __future__ import annotations
@@ -15,6 +12,9 @@ from collections import Counter
 
 from mm_wordle.game import LetterFeedback, WordleEnv
 from mm_wordle.solver import filter_candidates
+from mm_wordle.words import load_answers
+
+SOLVED_BONUS = math.log2(len(load_answers()))
 
 
 def _feedback_pattern(guess: str, target: str) -> tuple[str, ...]:
@@ -55,14 +55,22 @@ def compute_reward(
     """Compute reward as actual info gain minus expected info gain.
 
     Returns (reward, actual_info_gain, expected_info_gain).
+
+    Special case: if all feedback is green (solved), returns the
+    solved bonus (~11.2 bits) as actual info gain.
     """
     n_before = len(candidates_before)
     if n_before <= 1:
+        if all(f == LetterFeedback.GREEN for f in feedback):
+            return SOLVED_BONUS, SOLVED_BONUS, 0.0
         return 0.0, 0.0, 0.0
 
     candidates_after = filter_candidates(candidates_before, guess, feedback)
     n_after = max(len(candidates_after), 1)
     actual = math.log2(n_before / n_after)
+
+    if all(f == LetterFeedback.GREEN for f in feedback):
+        actual = max(actual, SOLVED_BONUS)
 
     expected = expected_info_gain(guess, candidates_before)
 
