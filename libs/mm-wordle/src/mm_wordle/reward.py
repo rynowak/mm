@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 
 from mm_wordle.game import GameState, GuessFeedback, LetterFeedback
+from mm_wordle.solver import filter_candidates
 
 
 @dataclass
@@ -13,7 +14,8 @@ class RewardConfig:
     no_new_info: float = 0.0
     green_letter: float = 0.2
     yellow_letter: float = 0.1
-    solved: float = 1.0
+    elimination_weight: float = 1.0
+    solved: float = 2.0
     failed: float = -0.5
 
 
@@ -23,6 +25,7 @@ def compute_reward(
     feedback: list[LetterFeedback],
     valid_words: set[str],
     config: RewardConfig | None = None,
+    candidates_before: list[str] | None = None,
 ) -> float:
     """Compute reward for a guess given the resulting feedback and game state.
 
@@ -32,6 +35,9 @@ def compute_reward(
         feedback: The feedback for this guess.
         valid_words: Set of all valid words.
         config: Reward configuration. Uses defaults if None.
+        candidates_before: List of candidate words before this guess.
+            If provided, an elimination reward is computed based on how
+            many candidates this guess rules out.
 
     Returns:
         The reward value.
@@ -41,40 +47,40 @@ def compute_reward(
 
     guess = guess.lower()
 
-    # Check for invalid word
     if guess not in valid_words:
         return config.invalid_word
 
-    # Check for repeated guess
     previous_guesses = [gf.guess for gf in state.guesses[:-1]] if state.guesses else []
     if guess in previous_guesses:
         return config.repeated_guess
 
-    # Check if solved
     if state.solved:
         return config.solved
 
-    # Check if failed
     if state.failed:
         return config.failed
 
-    # Check if guess contradicts known clues from previous guesses
     if _contradicts_clues(guess, state.guesses[:-1] if state.guesses else []):
         return config.contradicts_clues
 
-    # Score based on new information from feedback
     reward = 0.0
-    has_new_info = False
 
+    # Green/yellow letter bonuses
     for fb in feedback:
         if fb == LetterFeedback.GREEN:
             reward += config.green_letter
-            has_new_info = True
         elif fb == LetterFeedback.YELLOW:
             reward += config.yellow_letter
-            has_new_info = True
 
-    if not has_new_info:
+    # Information-theoretic elimination reward
+    if candidates_before is not None and len(candidates_before) > 1:
+        candidates_after = filter_candidates(candidates_before, guess, feedback)
+        n_before = len(candidates_before)
+        n_after = max(len(candidates_after), 1)
+        elimination_rate = 1.0 - (n_after / n_before)
+        reward += config.elimination_weight * elimination_rate
+
+    if reward == 0.0:
         return config.no_new_info
 
     return reward

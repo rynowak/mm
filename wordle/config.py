@@ -75,7 +75,8 @@ class RewardModelConfig(BaseModel):
     no_new_info: float = 0.0
     green_letter: float = 0.2
     yellow_letter: float = 0.1
-    solved: float = 1.0
+    elimination_weight: float = 1.0
+    solved: float = 2.0
     failed: float = -0.5
 
 

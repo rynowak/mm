@@ -48,6 +48,7 @@ from mm_wordle import (
     game_state_to_prompt,
     load_answers,
 )
+from mm_wordle.solver import filter_candidates
 from torch import Tensor
 
 # ---------------------------------------------------------------------------
@@ -119,6 +120,7 @@ def build_reward_config(config: FinetuneConfig) -> RewardConfig:
         no_new_info=rc.no_new_info,
         green_letter=rc.green_letter,
         yellow_letter=rc.yellow_letter,
+        elimination_weight=rc.elimination_weight,
         solved=rc.solved,
         failed=rc.failed,
     )
@@ -294,30 +296,23 @@ def play_game_reinforce(
     tokenizer: CharTokenizer,
     reward_config: RewardConfig,
     valid_words: set[str],
+    answers: list[str],
     trie: WordTrie,
     device: torch.device,
     constrained: bool,
 ) -> tuple[list[Tensor], list[float], GameReplay]:
-    """Play a complete Wordle game, collecting log probs and rewards per turn.
-
-    Returns:
-        (turn_log_probs, turn_rewards, replay)
-        - turn_log_probs: list of (5,) log prob tensors, one per turn
-        - turn_rewards: list of scalar rewards, one per turn
-        - replay: GameReplay for visualization
-    """
+    """Play a complete Wordle game, collecting log probs and rewards per turn."""
     state = env.reset(target_word)
     turn_log_probs: list[Tensor] = []
     turn_rewards: list[float] = []
     replay_guesses: list[str] = []
     replay_feedback: list[list[str]] = []
+    candidates = list(answers)
 
     while not state.solved and not state.failed:
-        # Encode game state to tokens
         state_tokens = game_state_to_prompt(state)
         state_ids = torch.tensor(tokenizer.encode("".join(state_tokens)), dtype=torch.long, device=device)
 
-        # Sample a guess
         if constrained:
             samples = sample_constrained(model, state_ids, trie, tokenizer, device)
         else:
@@ -325,18 +320,16 @@ def play_game_reinforce(
 
         guess, word_ids = samples[0]
 
-        # Compute log probs under current policy (with gradients)
         lp = compute_guess_log_probs(model, state_ids, word_ids)
         turn_log_probs.append(lp)
 
-        # Play the guess
         new_state, _done = env.step(state, guess)
-
-        # Get feedback for reward computation
         feedback = new_state.guesses[-1].feedback if new_state.guesses else []
 
-        reward = compute_reward(new_state, guess, feedback, valid_words, reward_config)
+        reward = compute_reward(new_state, guess, feedback, valid_words, reward_config, candidates_before=candidates)
         turn_rewards.append(reward)
+
+        candidates = filter_candidates(candidates, guess, feedback)
 
         # Record for replay
         replay_guesses.append(guess)
@@ -374,21 +367,19 @@ def collect_game_experience(
     tokenizer: CharTokenizer,
     reward_config: RewardConfig,
     valid_words: set[str],
+    answers: list[str],
     trie: WordTrie,
     device: torch.device,
     group_size: int,
     constrained: bool,
 ) -> tuple[list[TurnExperience], GameReplay, float]:
-    """Play a Wordle game and collect experience for GRPO optimization.
-
-    Sampling and reward computation happen here (no gradients needed).
-    Returns the collected experience, replay, and total reward.
-    """
+    """Play a Wordle game and collect experience for GRPO optimization."""
     state = env.reset(target_word)
     experiences: list[TurnExperience] = []
     replay_guesses: list[str] = []
     replay_feedback: list[list[str]] = []
     total_reward = 0.0
+    candidates = list(answers)
 
     while not state.solved and not state.failed:
         state_tokens = game_state_to_prompt(state)
@@ -407,7 +398,7 @@ def collect_game_experience(
         for guess in guesses:
             sim_state, _ = env.step(state, guess)
             fb = sim_state.guesses[-1].feedback if sim_state.guesses else []
-            r = compute_reward(sim_state, guess, fb, valid_words, reward_config)
+            r = compute_reward(sim_state, guess, fb, valid_words, reward_config, candidates_before=candidates)
             rewards.append(r)
         rewards_tensor = torch.tensor(rewards, dtype=torch.float32, device=device)
 
@@ -446,6 +437,8 @@ def collect_game_experience(
         feedback = new_state.guesses[-1].feedback if new_state.guesses else []
         replay_guesses.append(chosen_guess)
         replay_feedback.append([fb.value for fb in feedback])
+
+        candidates = filter_candidates(candidates, chosen_guess, feedback)
         state = new_state
 
     replay = GameReplay(
@@ -559,6 +552,7 @@ def collect_grpo_step_data(
     tokenizer: CharTokenizer,
     reward_config: RewardConfig,
     valid_words: set[str],
+    answers: list[str],
     trie: WordTrie,
     device: torch.device,
     group_size: int,
@@ -590,7 +584,7 @@ def collect_grpo_step_data(
     for guess in guesses:
         sim_state, _ = env.step(state, guess)
         fb = sim_state.guesses[-1].feedback if sim_state.guesses else []
-        r = compute_reward(sim_state, guess, fb, valid_words, reward_config)
+        r = compute_reward(sim_state, guess, fb, valid_words, reward_config, candidates_before=answers)
         rewards.append(r)
         # Build a simple breakdown
         reward_breakdowns.append({"total": r})
@@ -930,6 +924,7 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
                     tokenizer=tokenizer,
                     reward_config=reward_config,
                     valid_words=valid_words,
+                    answers=answers,
                     trie=word_trie,
                     device=device,
                     constrained=constrained,
@@ -1000,6 +995,7 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
                     tokenizer=tokenizer,
                     reward_config=reward_config,
                     valid_words=valid_words,
+                    answers=answers,
                     trie=word_trie,
                     device=device,
                     group_size=group_size,
@@ -1138,6 +1134,7 @@ def train(config: FinetuneConfig, checkpoint_path: str, resume_path: str | None 
                 tokenizer=tokenizer,
                 reward_config=reward_config,
                 valid_words=valid_words,
+                answers=answers,
                 trie=word_trie,
                 device=device,
                 group_size=group_size,
