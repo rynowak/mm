@@ -52,7 +52,7 @@ def entropy_guess(candidates: list[str], valid_guesses: list[str]) -> str:
     best_guess = candidates[0]
     best_score = 0
 
-    search_space = valid_guesses if len(candidates) > 10 else candidates
+    search_space = candidates if len(candidates) <= 200 else random.sample(candidates, 200)
     for guess in search_space:
         patterns: set[tuple[str, ...]] = set()
         for target in candidates:
