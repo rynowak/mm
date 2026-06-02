@@ -17,11 +17,10 @@ from finetune import (
     load_pretrained_model,
     sample_constrained,
     sample_unconstrained,
-    score_valid_words,
 )
 from mm_model import GPT, GPTConfig, save_checkpoint
 from mm_tokenizers import CharTokenizer
-from mm_wordle import RewardConfig
+from mm_wordle import RewardConfig, WordTrie
 
 _CPU = torch.device("cpu")
 
@@ -84,84 +83,51 @@ class TestCreateReferenceModel:
         assert not torch.allclose(out_model, out_ref)
 
 
-class TestScoreValidWords:
-    def test_returns_correct_shape(self) -> None:
-        model = _make_tiny_model()
-        model.eval()
-        tokenizer = CharTokenizer()
-
-        game_state_ids = torch.tensor(tokenizer.encode("[bos]"), dtype=torch.long)
-        words = ["crane", "house", "slate"]
-        word_ids = [torch.tensor(tokenizer.encode(w), dtype=torch.long) for w in words]
-
-        scores = score_valid_words(model, game_state_ids, word_ids, torch.device("cpu"))
-        assert scores.shape == (3,)
-
-    def test_scores_are_finite(self) -> None:
-        model = _make_tiny_model()
-        model.eval()
-        tokenizer = CharTokenizer()
-
-        game_state_ids = torch.tensor(tokenizer.encode("[bos]"), dtype=torch.long)
-        words = ["crane", "house"]
-        word_ids = [torch.tensor(tokenizer.encode(w), dtype=torch.long) for w in words]
-
-        scores = score_valid_words(model, game_state_ids, word_ids, torch.device("cpu"))
-        assert torch.isfinite(scores).all()
-
-    def test_scores_are_negative(self) -> None:
-        """Log probabilities should be non-positive."""
-        model = _make_tiny_model()
-        model.eval()
-        tokenizer = CharTokenizer()
-
-        game_state_ids = torch.tensor(tokenizer.encode("[bos]"), dtype=torch.long)
-        words = ["crane", "house"]
-        word_ids = [torch.tensor(tokenizer.encode(w), dtype=torch.long) for w in words]
-
-        scores = score_valid_words(model, game_state_ids, word_ids, torch.device("cpu"))
-        assert (scores <= 0).all()
-
-
 class TestSampleConstrained:
     def test_returns_valid_word(self) -> None:
         model = _make_tiny_model()
         tokenizer = CharTokenizer()
-
         words = ["crane", "house", "slate"]
-        word_ids = [torch.tensor(tokenizer.encode(w), dtype=torch.long) for w in words]
+        trie = WordTrie.from_words(words)
         game_state_ids = torch.tensor(tokenizer.encode("[bos]"), dtype=torch.long)
 
-        results = sample_constrained(model, game_state_ids, word_ids, words, torch.device("cpu"))
+        results = sample_constrained(model, game_state_ids, trie, tokenizer, torch.device("cpu"))
         assert len(results) == 1
         word, ids = results[0]
-        assert word in words
+        assert trie.is_valid_word(word)
         assert ids.shape == (5,)
 
     def test_multiple_samples(self) -> None:
         model = _make_tiny_model()
         tokenizer = CharTokenizer()
-
         words = ["crane", "house", "slate"]
-        word_ids = [torch.tensor(tokenizer.encode(w), dtype=torch.long) for w in words]
+        trie = WordTrie.from_words(words)
         game_state_ids = torch.tensor(tokenizer.encode("[bos]"), dtype=torch.long)
 
-        results = sample_constrained(model, game_state_ids, word_ids, words, torch.device("cpu"), n_samples=5)
+        results = sample_constrained(model, game_state_ids, trie, tokenizer, torch.device("cpu"), n_samples=5)
         assert len(results) == 5
         for word, _ids in results:
-            assert word in words
+            assert trie.is_valid_word(word)
 
     def test_restores_training_mode(self) -> None:
         model = _make_tiny_model()
         model.train()
         tokenizer = CharTokenizer()
-
-        words = ["crane"]
-        word_ids = [torch.tensor(tokenizer.encode(w), dtype=torch.long) for w in words]
+        trie = WordTrie.from_words(["crane"])
         game_state_ids = torch.tensor(tokenizer.encode("[bos]"), dtype=torch.long)
 
-        sample_constrained(model, game_state_ids, word_ids, words, torch.device("cpu"))
+        sample_constrained(model, game_state_ids, trie, tokenizer, torch.device("cpu"))
         assert model.training
+
+    def test_generates_5_char_words(self) -> None:
+        model = _make_tiny_model()
+        tokenizer = CharTokenizer()
+        trie = WordTrie.from_words(["crane", "house", "slate", "about", "train"])
+        game_state_ids = torch.tensor(tokenizer.encode("[bos]"), dtype=torch.long)
+
+        results = sample_constrained(model, game_state_ids, trie, tokenizer, torch.device("cpu"), n_samples=10)
+        for word, _ids in results:
+            assert len(word) == 5
 
 
 class TestSampleUnconstrained:

@@ -41,6 +41,7 @@ from mm_viz import EvalSnapshot, GameReplay, GRPOStepData
 from mm_wordle import (
     RewardConfig,
     WordleEnv,
+    WordTrie,
     all_valid_words,
     compute_reward,
     game_state_to_tokens,
@@ -121,98 +122,57 @@ def build_reward_config(config: FinetuneConfig) -> RewardConfig:
 # ---------------------------------------------------------------------------
 
 
-def score_valid_words(
-    model: GPT,
-    game_state_ids: Tensor,
-    valid_word_ids_list: list[Tensor],
-    device: torch.device,
-    chunk_size: int = 4000,
-) -> Tensor:
-    """Score each valid word by computing sum of log probs of its characters.
-
-    For each valid word, concatenates game_state_ids + word_char_ids, runs the
-    model forward, and sums log probs for the word character positions.
-
-    Processes in chunks to manage memory with ~13K valid words.
-
-    Args:
-        model: The GPT model (in eval mode for this call).
-        game_state_ids: (prompt_len,) token IDs for the current game state.
-        valid_word_ids_list: list of (5,) tensors, one per valid word.
-        device: Device to run on.
-        chunk_size: Number of words to score per forward pass.
-
-    Returns:
-        (num_valid_words,) tensor of log prob scores.
-    """
-    prompt_len = game_state_ids.shape[0]
-    num_words = len(valid_word_ids_list)
-    all_scores = torch.empty(num_words, device=device)
-
-    # Stack all word IDs: (num_words, 5)
-    word_ids_tensor = torch.stack(valid_word_ids_list)  # (num_words, 5)
-
-    for start in range(0, num_words, chunk_size):
-        end = min(start + chunk_size, num_words)
-        chunk_word_ids = word_ids_tensor[start:end]  # (chunk, 5)
-        chunk_len = chunk_word_ids.shape[0]
-
-        # Expand prompt: (chunk, prompt_len)
-        prompt_expanded = game_state_ids.unsqueeze(0).expand(chunk_len, -1)
-
-        # Concat: (chunk, prompt_len + 5)
-        full_sequences = torch.cat([prompt_expanded, chunk_word_ids.to(device)], dim=-1)
-
-        # Forward pass
-        with torch.no_grad():
-            logits, _ = model(full_sequences)  # (chunk, total_len, vocab_size)
-
-        # Extract logits that predict the word characters.
-        # Logits at position (prompt_len - 1) predict the first word char.
-        completion_logits = logits[:, prompt_len - 1 : prompt_len - 1 + 5, :]  # (chunk, 5, vocab)
-
-        # Compute log probs for the actual word characters
-        log_probs = F.log_softmax(completion_logits, dim=-1)  # (chunk, 5, vocab)
-        token_log_probs = log_probs.gather(dim=-1, index=chunk_word_ids.to(device).unsqueeze(-1))  # (chunk, 5, 1)
-        token_log_probs = token_log_probs.squeeze(-1)  # (chunk, 5)
-
-        # Sum log probs per word
-        all_scores[start:end] = token_log_probs.sum(dim=-1)  # (chunk,)
-
-    return all_scores
-
-
 def sample_constrained(
     model: GPT,
     game_state_ids: Tensor,
-    valid_word_ids_list: list[Tensor],
-    valid_words_list: list[str],
+    trie: WordTrie,
+    tokenizer: CharTokenizer,
     device: torch.device,
     n_samples: int = 1,
     temperature: float = 1.0,
 ) -> list[tuple[str, Tensor]]:
-    """Sample word(s) from the constrained distribution over valid words.
+    """Sample word(s) using trie-constrained autoregressive decoding.
 
-    Scores all valid words, applies softmax to get a distribution, and samples.
+    At each of the 5 character positions, mask the model's output logits
+    to only allow characters that continue a valid word in the trie.
+    5 forward passes per sample regardless of word list size.
     """
     was_training = model.training
     model.eval()
 
-    cur_words = valid_words_list
-    cur_ids = valid_word_ids_list
-
-    scores = score_valid_words(model, game_state_ids, cur_ids, device)
-
-    # Apply temperature and softmax to get sampling distribution
-    probs = F.softmax(scores / temperature, dim=-1)  # (num_words,)
-
-    # Sample
-    indices = torch.multinomial(probs, num_samples=n_samples, replacement=True)
-
     results: list[tuple[str, Tensor]] = []
-    for idx in indices:
-        word = cur_words[idx.item()]
-        word_ids = cur_ids[idx.item()]
+    for _ in range(n_samples):
+        idx = game_state_ids.unsqueeze(0).to(device)  # (1, prompt_len)
+        prefix = ""
+
+        for _pos in range(5):
+            logits, _ = model(idx)
+            logits = logits[:, -1, :] / temperature  # (1, vocab_size)
+
+            # Mask to only valid next characters from the trie
+            valid_chars = trie.valid_next_chars(prefix)
+            if not valid_chars:
+                break
+
+            mask = torch.full_like(logits, float("-inf"))
+            for ch in valid_chars:
+                token_ids = tokenizer.encode(ch)
+                if token_ids:
+                    mask[0, token_ids[0]] = 0.0
+            logits = logits + mask
+
+            probs = F.softmax(logits, dim=-1)
+            next_token = torch.multinomial(probs, num_samples=1)
+            idx = torch.cat([idx, next_token], dim=1)
+
+            try:
+                ch = tokenizer.decode([next_token.item()])
+                prefix += ch
+            except ValueError:
+                prefix += "?"
+
+        word_ids = idx[0, -5:]
+        word = prefix.ljust(5, "a")[:5]
         results.append((word, word_ids))
 
     if was_training:
@@ -316,8 +276,7 @@ def play_game_reinforce(
     tokenizer: CharTokenizer,
     reward_config: RewardConfig,
     valid_words: set[str],
-    valid_word_ids_list: list[Tensor],
-    valid_words_list: list[str],
+    trie: WordTrie,
     device: torch.device,
     constrained: bool,
 ) -> tuple[list[Tensor], list[float], GameReplay]:
@@ -342,7 +301,7 @@ def play_game_reinforce(
 
         # Sample a guess
         if constrained:
-            samples = sample_constrained(model, state_ids, valid_word_ids_list, valid_words_list, device)
+            samples = sample_constrained(model, state_ids, trie, tokenizer, device)
         else:
             samples = sample_unconstrained(model, state_ids, device, tokenizer)
 
@@ -386,8 +345,7 @@ def play_game_grpo(
     tokenizer: CharTokenizer,
     reward_config: RewardConfig,
     valid_words: set[str],
-    valid_word_ids_list: list[Tensor],
-    valid_words_list: list[str],
+    trie: WordTrie,
     device: torch.device,
     group_size: int,
     clip_epsilon: float,
@@ -428,8 +386,8 @@ def play_game_grpo(
             samples = sample_constrained(
                 model,
                 state_ids,
-                valid_word_ids_list,
-                valid_words_list,
+                trie,
+                tokenizer,
                 device,
                 n_samples=group_size,
 
@@ -538,8 +496,7 @@ def collect_grpo_step_data(
     tokenizer: CharTokenizer,
     reward_config: RewardConfig,
     valid_words: set[str],
-    valid_word_ids_list: list[Tensor],
-    valid_words_list: list[str],
+    trie: WordTrie,
     device: torch.device,
     group_size: int,
     step: int,
@@ -554,8 +511,8 @@ def collect_grpo_step_data(
     samples = sample_constrained(
         model,
         state_ids,
-        valid_word_ids_list,
-        valid_words_list,
+        trie,
+        tokenizer,
         device,
         n_samples=group_size,
     )
@@ -636,8 +593,7 @@ def evaluate_games(
     tokenizer: CharTokenizer,
     reward_config: RewardConfig,
     valid_words: set[str],
-    valid_word_ids_list: list[Tensor],
-    valid_words_list: list[str],
+    trie: WordTrie,
     device: torch.device,
     constrained: bool,
 ) -> tuple[float, float, list[GameReplay]]:
@@ -670,10 +626,9 @@ def evaluate_games(
                 samples = sample_constrained(
                     model,
                     state_ids,
-                    valid_word_ids_list,
-                    valid_words_list,
+                    trie,
+                    tokenizer,
                     device,
-    
                 )
             else:
                 samples = sample_unconstrained(model, state_ids, device, tokenizer)
@@ -716,18 +671,10 @@ def evaluate_games(
 # ---------------------------------------------------------------------------
 
 
-def precompute_valid_word_ids(tokenizer: CharTokenizer, device: torch.device) -> tuple[list[Tensor], list[str]]:
-    """Precompute token IDs for all valid Wordle words.
-
-    Returns:
-        (valid_word_ids_list, valid_words_list) -- aligned lists.
-    """
-    words = sorted(all_valid_words())
-    ids_list: list[Tensor] = []
-    for word in words:
-        ids = tokenizer.encode(word)
-        ids_list.append(torch.tensor(ids, dtype=torch.long, device=device))
-    return ids_list, words
+def build_word_trie(action_space: str) -> WordTrie:
+    """Build a trie for constrained decoding."""
+    words = load_answers() if action_space == "answers" else sorted(all_valid_words())
+    return WordTrie.from_words(words)
 
 
 # ---------------------------------------------------------------------------
@@ -781,10 +728,10 @@ def train(config: FinetuneConfig, checkpoint_path: str) -> None:
     valid_words = all_valid_words()
     answers = load_answers()
 
-    # Precompute valid word token IDs (for constrained decoding)
-    print("Precomputing valid word token IDs...")
-    valid_word_ids_list, valid_words_list = precompute_valid_word_ids(tokenizer, device)
-    print(f"  {len(valid_words_list)} valid words ready")
+    # Build trie for constrained decoding
+    print("Building word trie for constrained decoding...")
+    word_trie = build_word_trie(rl_cfg.action_space)
+    print(f"  Action space: {rl_cfg.action_space}")
 
     # Fixed evaluation set
     max_eval_games = rl_cfg.max_eval_games
@@ -855,8 +802,7 @@ def train(config: FinetuneConfig, checkpoint_path: str) -> None:
                     tokenizer=tokenizer,
                     reward_config=reward_config,
                     valid_words=valid_words,
-                    valid_word_ids_list=valid_word_ids_list,
-                    valid_words_list=valid_words_list,
+                    trie=word_trie,
                     device=device,
                     constrained=constrained,
                 )
@@ -931,8 +877,7 @@ def train(config: FinetuneConfig, checkpoint_path: str) -> None:
                     tokenizer=tokenizer,
                     reward_config=reward_config,
                     valid_words=valid_words,
-                    valid_word_ids_list=valid_word_ids_list,
-                    valid_words_list=valid_words_list,
+                    trie=word_trie,
                     device=device,
                     group_size=group_size,
                     clip_epsilon=clip_epsilon,
@@ -1012,8 +957,7 @@ def train(config: FinetuneConfig, checkpoint_path: str) -> None:
                 tokenizer=tokenizer,
                 reward_config=reward_config,
                 valid_words=valid_words,
-                valid_word_ids_list=valid_word_ids_list,
-                valid_words_list=valid_words_list,
+                trie=word_trie,
                 device=device,
                 constrained=constrained,
             )
@@ -1048,8 +992,7 @@ def train(config: FinetuneConfig, checkpoint_path: str) -> None:
                 tokenizer=tokenizer,
                 reward_config=reward_config,
                 valid_words=valid_words,
-                valid_word_ids_list=valid_word_ids_list,
-                valid_words_list=valid_words_list,
+                trie=word_trie,
                 device=device,
                 group_size=group_size,
                 step=step,
@@ -1099,8 +1042,7 @@ def train(config: FinetuneConfig, checkpoint_path: str) -> None:
         tokenizer=tokenizer,
         reward_config=reward_config,
         valid_words=valid_words,
-        valid_word_ids_list=valid_word_ids_list,
-        valid_words_list=valid_words_list,
+        trie=word_trie,
         device=device,
         constrained=constrained,
     )
