@@ -55,9 +55,15 @@ def compute_reward(old: mm_tetris.TetrisState, new: mm_tetris.TetrisState) -> fl
         reward += 8.0
 
     if new.game_over:
-        reward -= 1.0
+        reward -= 2.0
 
-    reward -= 0.005 * new.max_height()
+    reward += 0.01
+
+    new_holes = new.count_holes()
+    old_holes = old.count_holes()
+    reward -= 0.1 * max(0, new_holes - old_holes)
+
+    reward -= 0.01 * new.max_height()
 
     return reward
 
