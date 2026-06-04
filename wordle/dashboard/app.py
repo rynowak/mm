@@ -22,7 +22,10 @@ def _load_live() -> dict | None:
     f = RUN_DIR / "live" / "latest.json"
     if not f.exists():
         return None
-    return json.loads(f.read_text())
+    try:
+        return json.loads(f.read_text())
+    except json.JSONDecodeError:
+        return None
 
 
 def _all_evals() -> list[tuple[int, float, float]]:

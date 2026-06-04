@@ -27,6 +27,23 @@ class TestNonCompositeReward:
         r_bad, _, _ = compute_reward("fuzzy", fb_bad, list(answers))
         assert r_good > r_bad
 
+    def test_actual_info_gain_is_correct(self) -> None:
+        import math
+
+        candidates = ["crane", "crate", "craze", "grace", "trace"]
+        fb = WordleEnv.compute_feedback("crane", "crate")
+        _, actual, _ = compute_reward("crane", fb, candidates)
+        from mm_wordle.solver import filter_candidates
+
+        after = filter_candidates(candidates, "crane", fb)
+        expected_actual = math.log2(len(candidates) / max(len(after), 1))
+        assert abs(actual - expected_actual) < 1e-10
+
+    def test_actual_info_gain_zero_at_one_candidate(self) -> None:
+        fb = [LetterFeedback.GREEN] * 5
+        _, actual, _ = compute_reward("crane", fb, ["crane"])
+        assert actual == 0.0
+
 
 class TestCompositeReward:
     def test_normalized_ig_scales_to_info_gain_scale(self) -> None:

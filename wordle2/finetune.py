@@ -28,8 +28,7 @@ from mm_training import (
     get_device,
     seed_everything,
 )
-from mm_wordle import WordleEnv, compute_reward, load_answers
-from mm_wordle.reward import INVALID_WORD_PENALTY
+from mm_wordle import INVALID_WORD_PENALTY, WordleEnv, compute_reward, load_answers
 from mm_wordle.solver import filter_candidates
 from torch import Tensor
 
@@ -301,6 +300,10 @@ def train(
             )
 
         if not all_prompt_ids:
+            live_dir = logger.log_dir / "live"
+            live_dir.mkdir(exist_ok=True)
+            live_data = {"step": step, "loss": 0.0, "kl_div": 0.0, "clip_fraction": 0.0, "games": batch_replays}
+            (live_dir / "latest.json").write_text(json.dumps(live_data))
             continue
 
         n_turns = len(all_prompt_ids)
