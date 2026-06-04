@@ -44,16 +44,25 @@ def _compute_expected_info_gain(guess: str, candidates: list[str]) -> float:
     return expected
 
 
+_BEST_IG_CACHE: dict[tuple[str, ...], float] = {}
+
+
 def _best_expected_info_gain(candidates: list[str]) -> float:
     """Find the best expected info gain across all answer words for this candidate set."""
     if len(candidates) <= 1:
         return 0.0
+
+    key = tuple(candidates)
+    if key in _BEST_IG_CACHE:
+        return _BEST_IG_CACHE[key]
 
     best = 0.0
     for word in _ANSWERS:
         ig = _compute_expected_info_gain(word, candidates)
         if ig > best:
             best = ig
+
+    _BEST_IG_CACHE[key] = best
     return best
 
 

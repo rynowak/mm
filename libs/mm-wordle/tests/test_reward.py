@@ -157,3 +157,47 @@ class TestExpectedInfoGain:
 
     def test_single_candidate_zero(self) -> None:
         assert expected_info_gain("crane", ["crane"]) == 0.0
+
+
+class TestBestInfoGainCache:
+    def test_same_guesses_different_targets_at_turn3(self) -> None:
+        """Same guesses against different targets produce different candidate
+        lists and different best info gains. The cache must not confuse them."""
+        from mm_wordle.reward import _BEST_IG_CACHE, best_expected_info_gain
+        from mm_wordle.solver import filter_candidates
+
+        _BEST_IG_CACHE.clear()
+        answers = load_answers()
+        env = WordleEnv()
+        guesses = ["slate", "grind"]
+
+        # Game 1: target=foggy
+        cands1 = list(answers)
+        state1 = env.reset(target_word="foggy")
+        for g in guesses:
+            state1, _ = env.step(state1, g)
+            fb = state1.guesses[-1].feedback
+            cands1 = filter_candidates(cands1, g, fb)
+
+        # Game 2: target=humph
+        cands2 = list(answers)
+        state2 = env.reset(target_word="humph")
+        for g in guesses:
+            state2, _ = env.step(state2, g)
+            fb = state2.guesses[-1].feedback
+            cands2 = filter_candidates(cands2, g, fb)
+
+        assert cands1 != cands2
+
+        best1 = best_expected_info_gain(cands1)
+        best2 = best_expected_info_gain(cands2)
+
+        # Different candidate lists must produce different (or independently correct) results
+        # Verify each matches fresh computation
+        from mm_wordle.reward import _compute_expected_info_gain
+
+        manual1 = max(_compute_expected_info_gain(w, cands1) for w in answers) if len(cands1) > 1 else 0.0
+        manual2 = max(_compute_expected_info_gain(w, cands2) for w in answers) if len(cands2) > 1 else 0.0
+
+        assert abs(best1 - manual1) < 1e-10
+        assert abs(best2 - manual2) < 1e-10
