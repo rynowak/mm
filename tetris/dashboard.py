@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import json
 import queue
 import threading
 from collections import deque
@@ -85,6 +86,29 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "dashboard.html")
+
+
+@app.get("/api/autoresearch-status")
+async def get_autoresearch_status() -> dict[str, Any]:
+    status_path = Path(__file__).parent / "autoresearch-status.json"
+    if not status_path.exists():
+        return {"phase": "idle"}
+    try:
+        return json.loads(status_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {"phase": "idle"}
+
+
+@app.get("/api/changelog")
+async def get_changelog() -> list[dict[str, Any]]:
+    log_path = Path(__file__).parent / "autoresearch-log.jsonl"
+    if not log_path.exists():
+        return []
+    entries: list[dict[str, Any]] = []
+    for line in log_path.read_text().strip().splitlines():
+        if line.strip():
+            entries.append(json.loads(line))
+    return entries
 
 
 @app.get("/api/games")

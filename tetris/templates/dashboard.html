@@ -223,6 +223,117 @@ main {
 #game-list::-webkit-scrollbar { width: 6px; }
 #game-list::-webkit-scrollbar-track { background: var(--surface); }
 #game-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* Right panel tabs */
+.panel-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+}
+.panel-tab {
+    flex: 1;
+    padding: 10px 14px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-dim);
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 600;
+    transition: color 0.15s, border-color 0.15s;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+}
+.panel-tab:hover { color: var(--text); }
+.panel-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.tab-content { display: none; flex: 1; overflow-y: auto; min-height: 0; }
+.tab-content.active { display: flex; flex-direction: column; }
+
+/* Changelog entries */
+#changelog-list { flex: 1; overflow-y: auto; min-height: 0; }
+
+.changelog-entry {
+    padding: 10px 14px;
+    border-bottom: 1px solid #1a1a30;
+    font-size: 12px;
+}
+.changelog-entry:hover { background: var(--surface-alt); }
+
+.changelog-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.changelog-iter { color: var(--text-dim); font-size: 11px; min-width: 24px; }
+.changelog-badge {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+.badge-kept { background: #1a3a1a; color: var(--success); }
+.badge-reverted { background: #3a1a1a; color: var(--danger); }
+.badge-baseline { background: #1a1a3a; color: var(--accent); }
+
+.changelog-metric {
+    font-weight: 600;
+    margin-left: auto;
+    font-size: 12px;
+}
+.changelog-metric.up { color: var(--success); }
+.changelog-metric.down { color: var(--danger); }
+.changelog-metric.neutral { color: var(--accent); }
+
+.changelog-change {
+    color: var(--text);
+    line-height: 1.4;
+    margin-bottom: 2px;
+}
+.changelog-rationale {
+    color: var(--text-dim);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+#changelog-list::-webkit-scrollbar { width: 6px; }
+#changelog-list::-webkit-scrollbar-track { background: var(--surface); }
+#changelog-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* Live autoresearch status */
+.ar-status {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    background: var(--surface-alt);
+}
+.ar-status.hidden { display: none; }
+
+.ar-status-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.ar-phase {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+.phase-reading { background: #1a1a3a; color: var(--accent); }
+.phase-proposing { background: #2a1a3a; color: #cc88ff; }
+.phase-training { background: #1a3a1a; color: var(--success); animation: pulse 1.5s ease-in-out infinite; }
+.phase-evaluating { background: #3a3a1a; color: var(--warning); }
+
+.ar-status-change { color: var(--text); line-height: 1.4; margin-top: 4px; }
+.ar-status-rationale { color: var(--text-dim); font-size: 11px; line-height: 1.4; margin-top: 2px; }
+.ar-status-metric { color: var(--text-dim); font-size: 11px; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -300,10 +411,19 @@ main {
         </div>
     </div>
 
-    <!-- Games list -->
+    <!-- Right panel: Games + Changelog tabs -->
     <div id="games-panel">
-        <h3>Completed Games</h3>
-        <div id="game-list"></div>
+        <div class="panel-tabs">
+            <button class="panel-tab active" onclick="switchTab('games')">Games</button>
+            <button class="panel-tab" onclick="switchTab('changelog')">Changelog</button>
+        </div>
+        <div id="tab-games" class="tab-content active">
+            <div id="game-list"></div>
+        </div>
+        <div id="tab-changelog" class="tab-content">
+            <div id="ar-status" class="ar-status hidden"></div>
+            <div id="changelog-list"></div>
+        </div>
     </div>
 </main>
 
@@ -709,11 +829,126 @@ function formatNum(n) {
 }
 
 // =========================================================================
+// Tab switching
+// =========================================================================
+function switchTab(tab) {
+    document.querySelectorAll('.panel-tab').forEach(t => t.classList.toggle('active', t.textContent.trim().toLowerCase() === tab));
+    document.getElementById('tab-games').classList.toggle('active', tab === 'games');
+    document.getElementById('tab-changelog').classList.toggle('active', tab === 'changelog');
+    if (tab === 'changelog') fetchChangelog();
+}
+
+// =========================================================================
+// Changelog
+// =========================================================================
+let changelogData = [];
+let changelogPollTimer = null;
+
+function fetchChangelog() {
+    fetch('/api/changelog')
+        .then(r => r.json())
+        .then(entries => {
+            if (entries.length !== changelogData.length) {
+                changelogData = entries;
+                renderChangelog();
+            }
+        })
+        .catch(() => {});
+}
+
+function renderChangelog() {
+    const list = document.getElementById('changelog-list');
+    list.innerHTML = '';
+
+    if (changelogData.length === 0) {
+        list.innerHTML = '<div style="padding:20px;color:var(--text-dim);text-align:center;font-size:12px;">No autoresearch iterations yet.<br>Run /autoresearch to start.</div>';
+        return;
+    }
+
+    for (let i = changelogData.length - 1; i >= 0; i--) {
+        const e = changelogData[i];
+        const div = document.createElement('div');
+        div.className = 'changelog-entry';
+
+        const badgeClass = e.result === 'KEPT' ? 'badge-kept' : e.result === 'REVERTED' ? 'badge-reverted' : 'badge-baseline';
+        const metricClass = e.delta > 0 ? 'up' : e.delta < 0 ? 'down' : 'neutral';
+        const deltaStr = e.delta != null ? (e.delta >= 0 ? '+' : '') + e.delta.toFixed(2) : '';
+        const metricStr = e.metric != null ? e.metric.toFixed(2) : '-';
+
+        div.innerHTML = `
+            <div class="changelog-header">
+                <span class="changelog-iter">#${e.iteration}</span>
+                <span class="changelog-badge ${badgeClass}">${e.result}</span>
+                <span class="changelog-metric ${metricClass}">${metricStr}${deltaStr ? ' (' + deltaStr + ')' : ''}</span>
+            </div>
+            <div class="changelog-change">${escHtml(e.change)}</div>
+            <div class="changelog-rationale">${escHtml(e.rationale || '')}</div>
+        `;
+        list.appendChild(div);
+    }
+}
+
+function escHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+}
+
+function startChangelogPolling() {
+    if (changelogPollTimer) return;
+    changelogPollTimer = setInterval(() => { fetchChangelog(); fetchStatus(); }, 5000);
+}
+
+// =========================================================================
+// Autoresearch live status
+// =========================================================================
+let lastStatusPhase = 'idle';
+
+function fetchStatus() {
+    fetch('/api/autoresearch-status')
+        .then(r => r.json())
+        .then(renderStatus)
+        .catch(() => {});
+}
+
+function renderStatus(s) {
+    const el = document.getElementById('ar-status');
+    lastStatusPhase = s.phase;
+
+    if (s.phase === 'idle' || !s.phase) {
+        el.classList.add('hidden');
+        return;
+    }
+
+    el.classList.remove('hidden');
+    const phaseLabels = { reading: 'Reading', proposing: 'Proposing', training: 'Training', evaluating: 'Evaluating' };
+    const phaseClass = 'phase-' + s.phase;
+
+    let html = `<div class="ar-status-header">
+        <span class="ar-phase ${phaseClass}">${phaseLabels[s.phase] || s.phase}</span>
+        <span style="color:var(--text-dim)">Iteration #${s.iteration || '?'}</span>
+    </div>`;
+
+    if (s.change) html += `<div class="ar-status-change">${escHtml(s.change)}</div>`;
+    if (s.rationale) html += `<div class="ar-status-rationale">${escHtml(s.rationale)}</div>`;
+
+    const parts = [];
+    if (s.metric_before != null) parts.push('best: ' + s.metric_before.toFixed(2));
+    if (s.metric != null) parts.push('new: ' + s.metric.toFixed(2));
+    if (parts.length) html += `<div class="ar-status-metric">${parts.join(' | ')}</div>`;
+
+    el.innerHTML = html;
+}
+
+// =========================================================================
 // Init
 // =========================================================================
 drawBoard(null);
 startPlayback();
 connect();
+fetchChangelog();
+fetchStatus();
+startChangelogPolling();
 </script>
 </body>
 </html>
