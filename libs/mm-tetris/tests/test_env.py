@@ -125,6 +125,20 @@ class TestStep:
         new_state = mm_tetris.step(state, action)
         assert new_state.game_over
 
+    def test_piece_cannot_slip_under_overhang(self) -> None:
+        state = mm_tetris.reset(seed=0)
+        # Create an overhang: block at row 17, gap at row 18, floor at row 19
+        state.grid[17][0] = True
+        state.grid[19][0] = True
+        # Drop an I-piece vertically at col 0 — should land on top of the overhang
+        state.current_piece = "I"
+        action = mm_tetris.placement_to_action(1, 0)  # rot 1 = vertical, col 0
+        new_state = mm_tetris.step(state, action)
+        # The I-piece (height 4) should land at rows 13-16, NOT slip into row 18
+        assert new_state.grid[13][0]  # top of I piece
+        assert new_state.grid[16][0]  # bottom of I piece
+        assert not new_state.grid[18][0]  # gap should stay empty
+
 
 class TestLineClear:
     def test_full_row_cleared(self) -> None:

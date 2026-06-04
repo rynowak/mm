@@ -105,11 +105,14 @@ def valid_action_mask(state: TetrisState) -> list[bool]:
 
 
 def _find_drop_row(grid: list[list[bool]], shape: PieceShape, col: int) -> int:
-    """Find the lowest row where the piece can be placed. Returns -1 if no valid placement."""
-    for row in range(GRID_HEIGHT - shape.height, -1, -1):
+    """Drop piece from top, return the row where it lands. Returns -1 if blocked at spawn."""
+    last_valid = -1
+    for row in range(GRID_HEIGHT - shape.height + 1):
         if _fits(grid, shape, row, col):
-            return row
-    return -1
+            last_valid = row
+        else:
+            break
+    return last_valid
 
 
 def _fits(grid: list[list[bool]], shape: PieceShape, row: int, col: int) -> bool:
