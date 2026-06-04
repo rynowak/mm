@@ -75,11 +75,11 @@ class DQN(nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(mm_tetris.STATE_SIZE, 256),
+            nn.Linear(FEATURE_SIZE, 128),
             nn.ReLU(),
-            nn.Linear(256, 256),
+            nn.Linear(128, 128),
             nn.ReLU(),
-            nn.Linear(256, mm_tetris.NUM_ACTIONS),
+            nn.Linear(128, mm_tetris.NUM_ACTIONS),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -115,8 +115,23 @@ class ReplayBuffer:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+FEATURE_SIZE = 10 + 10 + 7 + 4  # heights, height_diffs, piece_onehot, aggregate stats
+
+
 def encode_state(state: mm_tetris.TetrisState, device: torch.device) -> torch.Tensor:
-    return torch.tensor(mm_tetris.state_to_flat(state), dtype=torch.float32, device=device)
+    heights = state.column_heights()
+    max_h = max(heights) if heights else 0
+    holes = state.count_holes()
+    bumpiness = sum(abs(heights[i] - heights[i + 1]) for i in range(len(heights) - 1))
+    normed_heights = [h / mm_tetris.GRID_HEIGHT for h in heights]
+    height_diffs = [
+        (heights[i] - heights[i + 1]) / mm_tetris.GRID_HEIGHT for i in range(len(heights) - 1)
+    ] + [0.0]
+    piece_onehot = [0.0] * mm_tetris.NUM_PIECE_TYPES
+    piece_onehot[mm_tetris.PIECE_NAMES.index(state.current_piece)] = 1.0
+    aggregate = [max_h / mm_tetris.GRID_HEIGHT, holes / 40.0, bumpiness / 40.0, sum(heights) / (mm_tetris.GRID_HEIGHT * mm_tetris.GRID_WIDTH)]
+    features = normed_heights + height_diffs + piece_onehot + aggregate
+    return torch.tensor(features, dtype=torch.float32, device=device)
 
 
 def select_action(
@@ -256,7 +271,8 @@ def train(on_event: EventCallback | None = None) -> None:
         q_values = policy_net(states).gather(1, actions.unsqueeze(1)).squeeze(1)
 
         with torch.no_grad():
-            next_q = target_net(next_states).max(1).values
+            best_actions = policy_net(next_states).argmax(1)
+            next_q = target_net(next_states).gather(1, best_actions.unsqueeze(1)).squeeze(1)
             target_q = rewards + GAMMA * next_q * (1 - dones)
 
         loss = F.mse_loss(q_values, target_q)
