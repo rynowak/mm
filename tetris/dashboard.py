@@ -65,21 +65,9 @@ def training_callback(event: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
-def _start_training() -> None:
-    from train import train
+training_status["state"] = "idle"
 
-    training_status["state"] = "training"
-    train(on_event=training_callback)
-
-
-@asynccontextmanager
-async def lifespan(_app: FastAPI):  # type: ignore[no-any-explicit]
-    thread = threading.Thread(target=_start_training, daemon=True)
-    thread.start()
-    yield
-
-
-app = FastAPI(title="Tetris RL Dashboard", lifespan=lifespan)
+app = FastAPI(title="Tetris RL Dashboard")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 
