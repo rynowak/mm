@@ -4,6 +4,7 @@ from mm_wordle.game import LetterFeedback, WordleEnv
 from mm_wordle.reward import (
     ENDGAME_BONUS,
     INFO_GAIN_SCALE,
+    INVALID_WORD_PENALTY,
     SOLVED_BONUS,
     compute_reward,
     expected_info_gain,
@@ -104,6 +105,20 @@ class TestCompositeReward:
         r_right, _, _ = compute_reward("crane", fb_right, candidates, composite=True)
         r_wrong, _, _ = compute_reward("slate", fb_wrong, candidates, composite=True)
         assert r_right > r_wrong
+
+    def test_invalid_word_gets_penalty(self) -> None:
+        answers = load_answers()
+        fb = [LetterFeedback.GRAY] * 5
+        reward, _, _ = compute_reward("zzzzz", fb, list(answers), composite=True)
+        assert reward == INVALID_WORD_PENALTY
+
+    def test_invalid_word_worse_than_any_valid(self) -> None:
+        answers = load_answers()
+        fb_invalid = [LetterFeedback.GRAY] * 5
+        fb_valid = WordleEnv.compute_feedback("fuzzy", "crane")
+        r_invalid, _, _ = compute_reward("folka", fb_invalid, list(answers), composite=True)
+        r_valid, _, _ = compute_reward("fuzzy", fb_valid, list(answers), composite=True)
+        assert r_valid > r_invalid
 
 
 class TestExpectedInfoGain:

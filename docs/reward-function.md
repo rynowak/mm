@@ -58,6 +58,17 @@ Only given when solving IS the right strategy (endgame). Solving with 10
 candidates is luck, not skill — no bonus. Solving with 1-2 candidates is
 the intended play and gets rewarded.
 
+### Invalid Word Penalty
+
+```
+if guess not in valid_words:
+    reward = INVALID_WORD_PENALTY
+```
+
+Any guess that isn't a valid Wordle word gets a fixed negative reward.
+This gives GRPO clear signal: if one sample in the group is valid and
+another is invalid, the valid one gets strong positive advantage.
+
 ## Constants
 
 | Constant | Value | Rationale |
@@ -65,6 +76,7 @@ the intended play and gets rewarded.
 | INFO_GAIN_SCALE | 10.0 | Dominates reward during opener and midgame |
 | ENDGAME_BONUS | 3.0 | Comparable to a good normalized info gain |
 | SOLVED_BONUS | 5.0 | Only in endgame, dominates when solving is optimal |
+| INVALID_WORD_PENALTY | -10.0 | Worse than any valid word's reward |
 
 ## Reward by Phase
 

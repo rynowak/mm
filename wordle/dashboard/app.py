@@ -109,11 +109,9 @@ async def frag_top():
         loss = live.get("loss", 0)
         kl = live.get("kl_div", 0)
         clip = live.get("clip_fraction", 0)
-        rew = live.get("reward_mean", 0)
         html += f'<span class="s">Loss <b>{loss:.4f}</b></span>'
         html += f'<span class="s">KL <b>{kl:.3f}</b></span>'
         html += f'<span class="s">Clip <b>{clip:.2f}</b></span>'
-        html += f'<span class="s">Reward <b>{rew:.2f}</b></span>'
 
     if evals:
         _, wr, ag = evals[-1]
@@ -144,12 +142,9 @@ async def frag_live():
         )
         status_cls = "win" if r.solved else "loss"
         status_txt = f"solved in {r.turns}" if r.solved else "failed"
-        reward = g.get("reward", 0)
-
         html += f'<div class="gc">{render_game_html(r)}'
         html += f'<p class="meta">{r.target} '
-        html += f'<span class="{status_cls}">{status_txt}</span> '
-        html += f"R={reward:+.2f}</p>"
+        html += f'<span class="{status_cls}">{status_txt}</span></p>'
 
         # Per-turn reward breakdown
         turn_details = g.get("turn_details", [])
@@ -231,12 +226,10 @@ async def frag_history():
     if history:
         loss_pts = [(h["step"], h["loss"]) for h in history]
         kl_pts = [(h["step"], h["kl_div"]) for h in history]
-        reward_pts = [(h["step"], h["reward_mean"]) for h in history]
 
         html += '<div style="display:flex;flex-wrap:wrap;gap:8px">'
         html += _svg_line_chart(loss_pts, label="Loss", color="#e07c4c")
         html += _svg_line_chart(kl_pts, label="KL Divergence", color="#c9b458")
-        html += _svg_line_chart(reward_pts, label="Reward Mean", color="#6aaa64")
         html += "</div>"
 
     evals = _all_evals()

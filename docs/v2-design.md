@@ -196,22 +196,42 @@ layer that computes constraint state from game history.
 
 ### Step 3: Pre-train
 
-Same flow as V1: cross-entropy loss on the 5 target characters. Eval
-metric is win rate from playing 200 games.
+Same flow as V1: cross-entropy loss on the 5 target characters.
 
-Start with the 1.5M model. Train 50K steps (same as V1 classifier that
-worked). Monitor convergence and scale up if needed.
+**Primary eval metric: valid word rate per turn.** The goal of pretraining
+is 100% valid word generation at all turns (1-6). Win rate is reported
+but is secondary — it's a side effect of valid word generation, not the
+training objective. RL handles strategy.
+
+Eval plays 200 games and reports valid word rate at each turn. Training
+is not done until late-turn valid word rate is near 100%.
+
+Start with the 5M model (6 layers, 8 heads, 256 embed dim). The 856K
+model (4 layers, 128 dim) achieved 65% win rate but produced invalid
+words at later turns — insufficient capacity for the word list.
 
 ### Step 4: RL Phase 1 (Openers, turns 1-2)
 
-GRPO with info gain reward (composite=False). Same as V1 Phase 1.
-This should learn a strong opener quickly since the constraint state
-at turn 1 is minimal.
+GRPO with info gain reward (composite=False). Goal: the model chooses
+openers with ≥5.5 bits info gain 100% of the time for turns 1-2 without
+regressing on valid word rate.
 
 ### Step 5: RL Phase 2 (Mid/Late game, turns 3-6)
 
 GRPO with composite reward (normalized info gain + endgame bonus +
 solve bonus). Opener model frozen from Phase 1.
+
+## Eval Metrics
+
+All three metrics reported at every eval across all phases:
+
+1. **Valid word rate by turn** — primary for pretraining. Goal: 100% at all turns.
+2. **Info gain by turn** — primary for Phase 1. Good opener threshold: ≥5.5 bits.
+3. **Win rate** — single-sample games (200 games, temp=0.1). Primary for Phase 2.
+
+A "good opener" is defined as ≥5.5 bits expected info gain. This is the
+top ~50 words out of 2315 (top 2%). The best openers (raise, slate, crate)
+score 5.8-5.9 bits.
 
 The key question: does the dense encoding help the model learn mid-game
 strategy better than V1? If the model can read constraints directly

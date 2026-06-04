@@ -10,13 +10,15 @@ from collections import Counter
 
 from mm_wordle.game import LetterFeedback, WordleEnv
 from mm_wordle.solver import filter_candidates
-from mm_wordle.words import load_answers
+from mm_wordle.words import all_valid_words, load_answers
 
 _ANSWERS = load_answers()
+_VALID_WORDS = all_valid_words()
 
 INFO_GAIN_SCALE = 10.0
 ENDGAME_BONUS = 3.0
 SOLVED_BONUS = 5.0
+INVALID_WORD_PENALTY = -10.0
 
 
 def _feedback_pattern(guess: str, target: str) -> tuple[str, ...]:
@@ -101,7 +103,9 @@ def compute_reward(
     if not composite:
         return expected, actual, expected
 
-    # Normalized info gain: fraction of max possible, scaled
+    if guess not in _VALID_WORDS:
+        return INVALID_WORD_PENALTY, actual, expected
+
     if n_before > 1:
         max_possible = math.log2(n_before)
         normalized = expected / max_possible if max_possible > 0 else 0.0

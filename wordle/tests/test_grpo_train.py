@@ -42,7 +42,7 @@ class TestCollectGameExperience:
         trie = _make_trie(words)
 
         torch.manual_seed(42)
-        _, replay, _, _ = collect_game_experience(
+        _, replay, _ = collect_game_experience(
             model=model,
             ref_model=ref_model,
             env=env,
@@ -74,7 +74,7 @@ class TestCollectGameExperience:
         assert init_state.turn == 2
 
         torch.manual_seed(42)
-        _, replay, _, _ = collect_game_experience(
+        _, replay, _ = collect_game_experience(
             model=model,
             ref_model=ref_model,
             env=env,
@@ -116,7 +116,7 @@ class TestCollectGameExperience:
             opener_feedback.append([f.value for f in fb])
 
         torch.manual_seed(42)
-        _, replay, _, _ = collect_game_experience(
+        _, replay, _ = collect_game_experience(
             model=model,
             ref_model=ref_model,
             env=env,

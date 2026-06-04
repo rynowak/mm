@@ -51,14 +51,13 @@ def collect_game_experience(
     initial_state: GameState | None = None,
     initial_candidates: list[str] | None = None,
     composite: bool = False,
-) -> tuple[list[TurnExperience], GameReplay, float, list[dict]]:
+) -> tuple[list[TurnExperience], GameReplay, list[dict]]:
     """Play a Wordle game and collect experience for GRPO optimization."""
     state = initial_state if initial_state is not None else env.reset(target_word)
     experiences: list[TurnExperience] = []
     replay_guesses: list[str] = []
     replay_feedback: list[list[str]] = []
     turn_details: list[dict] = []
-    total_reward = 0.0
     candidates = list(initial_candidates) if initial_candidates is not None else list(answers)
     turns_played = 0
 
@@ -122,7 +121,6 @@ def collect_game_experience(
 
         best_idx = int(rewards_tensor.argmax().item())
         chosen_guess = guesses[best_idx]
-        total_reward += rewards[best_idx]
 
         turn_details.append(
             {
@@ -148,7 +146,7 @@ def collect_game_experience(
         solved=state.solved,
         turns=state.turn,
     )
-    return experiences, replay, total_reward, turn_details
+    return experiences, replay, turn_details
 
 
 def _apply_trie_masks(
