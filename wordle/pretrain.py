@@ -121,28 +121,46 @@ def compute_valid_word_rate(
     model: GPT,
     tokenizer: CharTokenizer,
     device: torch.device,
-    n_samples: int = 100,
-) -> float:
-    """Generate five-character sequences and check what fraction are valid Wordle words."""
+    n_games: int = 50,
+) -> dict[int, float]:
+    """Play games and measure valid word rate per turn.
+
+    Returns dict mapping turn number → fraction of valid words.
+    """
+    from mm_wordle import WordleEnv, load_answers
+    from mm_wordle.serialize import game_state_to_prompt
+
     model.eval()
     valid_words = all_valid_words()
+    answers = load_answers()
+    env = WordleEnv()
 
-    n_valid = 0
-    for _ in range(n_samples):
-        prompt = torch.tensor([[tokenizer.bos_id]], dtype=torch.long, device=device)
-        output = model.generate(prompt, max_new_tokens=5, temperature=0.8, top_k=40)
-        # Take only the 5 generated characters (skip the bos token)
-        generated_ids = output[0, 1:].tolist()
-        try:
-            word = tokenizer.decode(generated_ids)
-            # Only count if it's exactly 5 lowercase letters
-            if len(word) == 5 and word.isalpha() and word.islower() and word in valid_words:
-                n_valid += 1
-        except ValueError:
-            pass
+    by_turn: dict[int, dict[str, int]] = {}
+    targets = random.sample(answers, min(n_games, len(answers)))
+
+    for target in targets:
+        state = env.reset(target_word=target)
+        while not state.solved and not state.failed:
+            turn = state.turn + 1
+            st = game_state_to_prompt(state)
+            si = torch.tensor(tokenizer.encode("".join(st)), dtype=torch.long, device=device)
+            output = model.generate(si.unsqueeze(0), max_new_tokens=5, temperature=0.1)
+            word_ids = output[0, -5:].tolist()
+            try:
+                word = tokenizer.decode(word_ids)
+            except ValueError:
+                word = "?????"
+
+            if turn not in by_turn:
+                by_turn[turn] = {"total": 0, "valid": 0}
+            by_turn[turn]["total"] += 1
+            if word in valid_words:
+                by_turn[turn]["valid"] += 1
+
+            state, _ = env.step(state, word)
 
     model.train()
-    return n_valid / n_samples
+    return {t: bt["valid"] / max(bt["total"], 1) for t, bt in by_turn.items()}
 
 
 def train(config: PretrainConfig, resume_path: str | None = None) -> None:
@@ -215,9 +233,13 @@ def train(config: PretrainConfig, resume_path: str | None = None) -> None:
         collate_fn=collate_fn,
     )
 
-    # Determine model size label from config
     embed_dim = config.model.embed_dim
-    size_label = "small" if embed_dim <= 256 else "medium"
+    if embed_dim <= 256:
+        size_label = "small"
+    elif embed_dim <= 384:
+        size_label = "medium"
+    else:
+        size_label = "large"
 
     # Metrics logger
     logger = MetricsLogger(experiment=f"pretrain-{size_label}")
@@ -307,10 +329,11 @@ def train(config: PretrainConfig, resume_path: str | None = None) -> None:
                 logger.log_text("samples/generated", sample, step)
                 print(f"  [sample] {sample[:100]}...")
 
-                # Valid word rate
-                vwr = compute_valid_word_rate(model, tokenizer, device)
-                logger.log_scalar("val/valid_word_rate", vwr, step)
-                print(f"  [valid-word-rate] {vwr:.2%}")
+                vwr_by_turn = compute_valid_word_rate(model, tokenizer, device)
+                for turn, rate in sorted(vwr_by_turn.items()):
+                    logger.log_scalar(f"val/valid_word_rate_t{turn}", rate, step)
+                vwr_summary = " ".join(f"t{t}={r:.0%}" for t, r in sorted(vwr_by_turn.items()))
+                print(f"  [valid-word-rate] {vwr_summary}")
 
             # Weight histograms (every 5 eval intervals)
             if step % (eval_interval * 5) == 0:
@@ -348,8 +371,9 @@ def train(config: PretrainConfig, resume_path: str | None = None) -> None:
     val_loss = evaluate(model, val_loader, device)
     print(f"Final val_loss: {val_loss:.4f}")
 
-    vwr = compute_valid_word_rate(model, tokenizer, device)
-    print(f"Final valid-word-rate: {vwr:.2%}")
+    vwr_by_turn = compute_valid_word_rate(model, tokenizer, device)
+    vwr_summary = " ".join(f"t{t}={r:.0%}" for t, r in sorted(vwr_by_turn.items()))
+    print(f"Final valid-word-rate: {vwr_summary}")
 
     logger.close()
 

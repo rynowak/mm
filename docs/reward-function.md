@@ -1,65 +1,82 @@
 # Reward Function Design
 
-The reward function has two modes, matching the two curriculum phases.
+## Strategy Phases
 
-## Phase 1: Expected Information Gain (Deterministic)
+Optimal Wordle play has three distinct phases:
 
-```
-reward = expected_info_gain(guess, candidates_before)
-```
+1. **Opener (turn 1-2):** Play high-coverage words that eliminate large portions of
+   the candidate space. Words like "slate" or "crane" that test common letters.
 
-The expected info gain is computed by simulating the guess against every candidate in the pool, grouping by feedback pattern, and computing the weighted average:
+2. **Midgame (3+ candidates):** Play "discovery" words that distinguish between
+   remaining candidates. These words may NOT be candidates themselves — the goal
+   is elimination, not solving.
 
-```
-expected = Σ (count / N) * log2(N / count)
-```
+3. **Endgame (1-2 candidates):** Guess a candidate. Discovery is no longer useful.
 
-This is a deterministic measure of guess quality. It does not depend on the target word. "raise" always scores 5.88, "marry" always scores 4.22, "fuzzy" always scores 2.31.
-
-**Why deterministic:** The old reward (`actual - expected`) depended on the target word. A bad guess could score positive if it got lucky feedback. GRPO reinforced lucky bad guesses as often as it penalized them, so the model didn't learn to avoid them. With deterministic expected info gain, GRPO consistently reinforces high-info words and suppresses low-info words.
-
-**No solve bonus.** Phase 1 trains turns 1-2 only. Solving on turn 1-2 means guessing the answer, which is not optimal information gathering. A word that happens to be the answer doesn't necessarily split the candidate space well.
-
-## Phase 2: Expected Information Gain + Solve Bonus
+## Reward Formula
 
 ```
-reward = expected_info_gain(guess, candidates_before)
-if solved:
-    reward += SOLVED_BONUS  # ~11.2 bits = log2(2315)
+reward = normalized_info_gain + endgame_bonus + solve_bonus
 ```
 
-Same deterministic base reward as Phase 1. When the model solves the puzzle (all 5 feedback letters green), it gets the solve bonus on top.
+### Normalized Info Gain
 
-**Why the solve bonus is needed in Phase 2:** Information gain cannot distinguish solving from not solving when `candidates_before` is small. With 1 candidate remaining, both a correct guess and an incorrect guess leave `candidates_after = 1`. Without the bonus, the model has no incentive to guess the known answer.
+```
+max_possible = log2(n_candidates)
+normalized = info_gain / max_possible    # 0 to 1
+reward_ig = normalized * INFO_GAIN_SCALE
+```
 
-The bonus equals the maximum possible single-turn info gain (~11.2 bits), so it scales consistently with the base reward.
+Info gain is normalized by the maximum possible info gain at that game state.
+This puts all turns on the same scale — a 50% efficient opener and a 90%
+efficient midgame play produce comparable reward magnitudes.
 
-## Expected Info Gain Computation
+`INFO_GAIN_SCALE` is set high enough that optimal information gathering always
+dominates over lucky outcomes during opener and midgame.
 
-For each candidate target in `candidates_before`, compute the feedback pattern that the guess would produce. Group candidates by pattern. The expected info gain is the weighted average of `log2(N / count)` across all patterns.
+When candidates = 1, max_possible = 0 and info gain is 0. The endgame bonus
+takes over.
 
-| Guess | Expected Info Gain | Why |
-|-------|-------------------|-----|
-| raise | 5.88 bits | High letter diversity, common letters |
-| slate | 5.86 bits | Similar quality to raise |
-| crane | 5.74 bits | Good but slightly less diverse |
-| marry | 4.22 bits | Repeated R wastes a slot |
-| fuzzy | 2.31 bits | Uncommon letters, low coverage |
+### Endgame Bonus
 
-These values are **precomputed** for the full 2,315-word answer list at startup (~6s one-time cost). Turn 1 reward lookups are instant.
+```
+if n_candidates <= 2 and guess in candidates:
+    reward += ENDGAME_BONUS
+```
 
-## Candidate Tracking
+Only activates when candidates are 1-2. Rewards guessing from the candidate
+set when discovery is no longer useful.
 
-`candidates_before` starts as all 2,315 answer words on turn 1. After each turn, it is filtered based on the chosen guess's feedback. The filtered list becomes `candidates_before` for the next turn.
+### Solve Bonus
 
-In GRPO, the group of candidates per turn are all scored against the same `candidates_before`. Each gets a deterministic expected info gain score. The best-scoring candidate is played to advance the game.
+```
+if solved and n_candidates <= 2:
+    reward += SOLVED_BONUS
+```
 
-## Summary
+Only given when solving IS the right strategy (endgame). Solving with 10
+candidates is luck, not skill — no bonus. Solving with 1-2 candidates is
+the intended play and gets rewarded.
 
-| | Phase 1 | Phase 2 |
-|---|---------|---------|
-| Turns | 1-2 | 3-6 |
-| Base reward | Expected info gain | Expected info gain |
-| Solve bonus | No | Yes (+11.2 bits) |
-| Depends on target | No | Only for solve bonus |
-| Objective | Learn to gather information | Learn to solve the puzzle |
+## Constants
+
+| Constant | Value | Rationale |
+|----------|-------|-----------|
+| INFO_GAIN_SCALE | 10.0 | Dominates reward during opener and midgame |
+| ENDGAME_BONUS | 3.0 | Comparable to a good normalized info gain |
+| SOLVED_BONUS | 5.0 | Only in endgame, dominates when solving is optimal |
+
+## Reward by Phase
+
+| Phase | Candidates | Reward components |
+|-------|-----------|-------------------|
+| Opener | 2315 | normalized_ig * 10 (max ~5.3) |
+| Midgame | 3-100 | normalized_ig * 10 (max ~10) |
+| Endgame | 1-2 | endgame_bonus (3) + solve_bonus (5) = 8 |
+
+In the midgame, a discovery word that achieves 100% of max info gain scores 10.
+A lucky solve with lower info gain scores less. Info gain drives the policy
+toward optimal play, not gambling.
+
+In the endgame, the combined bonus (8) exceeds typical midgame rewards, so the
+model learns to shift from discovery to solving when candidates are low.

@@ -1,7 +1,5 @@
 """Reward function for Wordle RL training.
 
-Reward = actual_info_gain - expected_info_gain, with a solve bonus.
-
 See docs/reward-function.md for the full design.
 """
 
@@ -15,7 +13,10 @@ from mm_wordle.solver import filter_candidates
 from mm_wordle.words import load_answers
 
 _ANSWERS = load_answers()
-SOLVED_BONUS = math.log2(len(_ANSWERS))
+
+INFO_GAIN_SCALE = 10.0
+ENDGAME_BONUS = 3.0
+SOLVED_BONUS = 5.0
 
 
 def _feedback_pattern(guess: str, target: str) -> tuple[str, ...]:
@@ -42,12 +43,7 @@ def _compute_expected_info_gain(guess: str, candidates: list[str]) -> float:
 
 
 class ExpectedInfoGainCache:
-    """Precomputed expected info gain for the full answer list.
-
-    Turn 1 always uses the same 2,315 candidates, so expected info gain
-    for any word is constant. Precompute once at startup (~6s), then
-    dict lookup on turn 1 instead of recomputing every time.
-    """
+    """Precomputed expected info gain for the full answer list."""
 
     def __init__(self) -> None:
         self._full_list_cache: dict[str, float] = {}
@@ -61,7 +57,6 @@ class ExpectedInfoGainCache:
         return _compute_expected_info_gain(guess, candidates)
 
     def precompute(self) -> None:
-        """Precompute expected info gain for all answer words."""
         answers = list(_ANSWERS)
         for word in answers:
             self._full_list_cache[word] = _compute_expected_info_gain(word, answers)
@@ -71,12 +66,10 @@ _CACHE = ExpectedInfoGainCache()
 
 
 def precompute_expected_info_gain() -> None:
-    """Call at startup to precompute turn-1 expected info gain for all words."""
     _CACHE.precompute()
 
 
 def expected_info_gain(guess: str, candidates: list[str]) -> float:
-    """Get expected info gain, using cache for the full answer list."""
     return _CACHE.get(guess, candidates)
 
 
@@ -84,34 +77,41 @@ def compute_reward(
     guess: str,
     feedback: list[LetterFeedback],
     candidates_before: list[str],
-    solve_bonus: bool = True,
+    composite: bool = False,
 ) -> tuple[float, float, float]:
     """Compute reward for a guess.
 
     Returns (reward, actual_info_gain, expected_info_gain).
 
-    The reward is the expected info gain of the guess — a deterministic
-    measure of guess quality that doesn't depend on the target word.
-    The actual info gain is also returned for logging but is not used
-    as the reward.
-
-    When solve_bonus is True and the puzzle is solved, the reward
-    includes SOLVED_BONUS to incentivize actually guessing the answer.
+    When composite=False: reward is pure expected info gain (unnormalized).
+    When composite=True: reward is normalized info gain + endgame bonus + solve bonus.
     """
     n_before = len(candidates_before)
-    if n_before <= 1:
-        if solve_bonus and all(f == LetterFeedback.GREEN for f in feedback):
-            return SOLVED_BONUS, SOLVED_BONUS, 0.0
-        return 0.0, 0.0, 0.0
+    solved = all(f == LetterFeedback.GREEN for f in feedback)
 
-    candidates_after = filter_candidates(candidates_before, guess, feedback)
-    n_after = max(len(candidates_after), 1)
-    actual = math.log2(n_before / n_after)
+    if n_before <= 1:
+        actual = SOLVED_BONUS if solved else 0.0
+    else:
+        candidates_after = filter_candidates(candidates_before, guess, feedback)
+        n_after = max(len(candidates_after), 1)
+        actual = math.log2(n_before / n_after)
 
     expected = expected_info_gain(guess, candidates_before)
 
-    reward = expected
-    if solve_bonus and all(f == LetterFeedback.GREEN for f in feedback):
+    if not composite:
+        return expected, actual, expected
+
+    # Normalized info gain: fraction of max possible, scaled
+    if n_before > 1:
+        max_possible = math.log2(n_before)
+        normalized = expected / max_possible if max_possible > 0 else 0.0
+        reward = normalized * INFO_GAIN_SCALE
+    else:
+        reward = 0.0
+
+    if n_before <= 2 and guess in candidates_before:
+        reward += ENDGAME_BONUS
+    if solved and n_before <= 2:
         reward += SOLVED_BONUS
 
     return reward, actual, expected

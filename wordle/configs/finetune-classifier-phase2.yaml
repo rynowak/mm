@@ -1,0 +1,28 @@
+model:
+  n_layers: 6
+  n_heads: 8
+  embed_dim: 256
+  context_len: 256
+  dropout: 0.1
+
+rl:
+  algorithm: grpo
+  decoding: unconstrained
+  action_space: answers
+  seed: 42
+  learning_rate: 1e-5
+  weight_decay: 0.01
+  warmup_steps: 50
+  max_steps: 3000
+  grad_clip: 1.0
+  eval_interval: 200
+  checkpoint_interval: 500
+  group_size: 8
+  clip_epsilon: 0.2
+  kl_beta: 0.2
+  ppo_epochs: 2
+  baseline_momentum: 0.99
+  batch_size: 8
+  max_eval_games: 200
+  curriculum_phase: 2
+  max_turns: 6

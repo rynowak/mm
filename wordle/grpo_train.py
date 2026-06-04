@@ -50,7 +50,7 @@ def collect_game_experience(
     max_turns: int = 6,
     initial_state: GameState | None = None,
     initial_candidates: list[str] | None = None,
-    solve_bonus: bool = True,
+    composite: bool = False,
 ) -> tuple[list[TurnExperience], GameReplay, float, list[dict]]:
     """Play a Wordle game and collect experience for GRPO optimization."""
     state = initial_state if initial_state is not None else env.reset(target_word)
@@ -80,7 +80,7 @@ def collect_game_experience(
         for guess in guesses:
             sim_state, _ = env.step(state, guess)
             fb = sim_state.guesses[-1].feedback if sim_state.guesses else []
-            r, actual, expected = compute_reward(guess, fb, candidates, solve_bonus=solve_bonus)
+            r, actual, expected = compute_reward(guess, fb, candidates, composite=composite)
             rewards.append(r)
             group_details.append(
                 {
@@ -230,6 +230,7 @@ def collect_grpo_step_data(
     device: torch.device,
     group_size: int,
     step: int,
+    constrained: bool = True,
 ) -> GRPOStepData | None:
     """Collect a GRPOStepData snapshot for one game turn (first turn only)."""
     state = env.reset(target_word)
@@ -237,7 +238,10 @@ def collect_grpo_step_data(
     state_text = "".join(state_tokens)
     state_ids = torch.tensor(tokenizer.encode(state_text), dtype=torch.long, device=device)
 
-    samples = sample_constrained(model, state_ids, trie, tokenizer, device, n_samples=group_size)
+    if constrained:
+        samples = sample_constrained(model, state_ids, trie, tokenizer, device, n_samples=group_size)
+    else:
+        samples = sample_unconstrained(model, state_ids, device, tokenizer, n_samples=group_size)
 
     guesses = [s[0] for s in samples]
     word_ids_list = [s[1] for s in samples]

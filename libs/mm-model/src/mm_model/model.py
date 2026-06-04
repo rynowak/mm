@@ -1,4 +1,4 @@
-"""Decoder-only GPT model with KV caching."""
+"""Decoder-only GPT model with KV caching and RoPE."""
 
 from __future__ import annotations
 
@@ -13,6 +13,19 @@ if TYPE_CHECKING:
     from mm_model.config import GPTConfig
 
 KVCache = tuple[Tensor, Tensor]
+
+
+def _precompute_freqs(head_dim: int, max_len: int, device: torch.device) -> Tensor:
+    freqs = 1.0 / (10000.0 ** (torch.arange(0, head_dim, 2, device=device).float() / head_dim))
+    t = torch.arange(max_len, device=device).float()
+    angles = torch.outer(t, freqs)
+    return torch.polar(torch.ones_like(angles), angles)
+
+
+def _apply_rope(x: Tensor, freqs: Tensor) -> Tensor:
+    x_complex = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
+    x_rotated = x_complex * freqs
+    return torch.view_as_real(x_rotated).reshape(*x.shape).type_as(x)
 
 
 class MLP(nn.Module):
@@ -42,7 +55,12 @@ class CausalSelfAttention(nn.Module):
         self.attn_dropout = config.dropout
         self.resid_dropout = nn.Dropout(config.dropout)
 
-    def forward(self, x: Tensor, kv_cache: KVCache | None = None) -> tuple[Tensor, KVCache]:
+    def forward(
+        self,
+        x: Tensor,
+        freqs: Tensor,
+        kv_cache: KVCache | None = None,
+    ) -> tuple[Tensor, KVCache]:
         b, t, c = x.size()
         qkv = self.qkv(x)
         q, k, v = qkv.split(c, dim=2)
@@ -50,6 +68,9 @@ class CausalSelfAttention(nn.Module):
         q = q.view(b, t, self.n_heads, self.head_dim).transpose(1, 2)
         k = k.view(b, t, self.n_heads, self.head_dim).transpose(1, 2)
         v = v.view(b, t, self.n_heads, self.head_dim).transpose(1, 2)
+
+        q = _apply_rope(q, freqs)
+        k = _apply_rope(k, freqs)
 
         if kv_cache is not None:
             k_prev, v_prev = kv_cache
@@ -78,8 +99,13 @@ class TransformerBlock(nn.Module):
         self.ln2 = nn.LayerNorm(config.embed_dim)
         self.mlp = MLP(config)
 
-    def forward(self, x: Tensor, kv_cache: KVCache | None = None) -> tuple[Tensor, KVCache]:
-        attn_out, new_cache = self.attn(self.ln1(x), kv_cache)
+    def forward(
+        self,
+        x: Tensor,
+        freqs: Tensor,
+        kv_cache: KVCache | None = None,
+    ) -> tuple[Tensor, KVCache]:
+        attn_out, new_cache = self.attn(self.ln1(x), freqs, kv_cache)
         x = x + attn_out
         x = x + self.mlp(self.ln2(x))
         return x, new_cache
@@ -91,12 +117,19 @@ class GPT(nn.Module):
         self.config = config
 
         self.token_emb = nn.Embedding(config.vocab_size, config.embed_dim)
-        self.pos_emb = nn.Embedding(config.context_len, config.embed_dim)
         self.drop = nn.Dropout(config.dropout)
 
         self.blocks = nn.ModuleList([TransformerBlock(config) for _ in range(config.n_layers)])
         self.ln_f = nn.LayerNorm(config.embed_dim)
-        self.lm_head = nn.Linear(config.embed_dim, config.vocab_size, bias=config.bias)
+        self.lm_head = nn.Linear(config.embed_dim, config.output_size, bias=config.bias)
+
+        head_dim = config.embed_dim // config.n_heads
+        self._rope_freqs: Tensor
+        self.register_buffer(
+            "_rope_freqs",
+            _precompute_freqs(head_dim, config.context_len, torch.device("cpu")),
+            persistent=False,
+        )
 
     def forward(
         self,
@@ -105,29 +138,17 @@ class GPT(nn.Module):
         kv_cache: list[KVCache] | None = None,
         start_pos: int = 0,
     ) -> tuple[Tensor, Tensor | None, list[KVCache]]:
-        """Forward pass with optional KV cache.
-
-        Args:
-            idx: Token indices (batch, seq_len). With cache, only new tokens.
-            targets: Optional targets for loss computation.
-            kv_cache: List of (K, V) per layer from previous positions.
-            start_pos: Position offset for positional embeddings when using cache.
-
-        Returns:
-            (logits, loss, new_kv_cache)
-        """
         b, t = idx.size()
 
-        pos = torch.arange(start_pos, start_pos + t, dtype=torch.long, device=idx.device)
-
         tok_emb = self.token_emb(idx)
-        pos_emb = self.pos_emb(pos)
-        x = self.drop(tok_emb + pos_emb)
+        x = self.drop(tok_emb)
+
+        freqs = self._rope_freqs[start_pos : start_pos + t].to(idx.device)
 
         new_caches: list[KVCache] = []
         for i, block in enumerate(self.blocks):
             layer_cache = kv_cache[i] if kv_cache is not None else None
-            x, new_cache = block(x, layer_cache)
+            x, new_cache = block(x, freqs, layer_cache)
             new_caches.append(new_cache)
 
         x = self.ln_f(x)

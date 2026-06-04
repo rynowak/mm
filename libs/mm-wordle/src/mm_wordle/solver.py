@@ -9,6 +9,8 @@ from mm_wordle.game import GameState, LetterFeedback, WordleEnv
 
 def filter_candidates(candidates: list[str], guess: str, feedback: list[LetterFeedback]) -> list[str]:
     """Filter candidate words to only those consistent with the feedback."""
+    if len(guess) != len(feedback):
+        return list(candidates)
     result = []
     for word in candidates:
         if _is_consistent(word, guess, feedback):

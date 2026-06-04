@@ -20,18 +20,14 @@ import torch
 from config import FinetuneConfig
 from decoding import compute_guess_log_probs, sample_constrained, sample_unconstrained
 from grpo_train import (
-    TurnExperience,
-    collect_game_experience,
     collect_grpo_step_data,
-    compute_grpo_loss,
 )
-from mm_grpo import MovingAverageBaseline, reinforce_loss
+from mm_grpo import MovingAverageBaseline
 from mm_model import GPT, GPTConfig, load_checkpoint, save_checkpoint
 from mm_tokenizers import CharTokenizer
 from mm_training import (
     MetricsLogger,
     RunManifest,
-    clip_grad_norm,
     create_optimizer,
     create_scheduler,
     get_device,
@@ -175,6 +171,7 @@ def evaluate_games(
     trie: WordTrie,
     device: torch.device,
     constrained: bool,
+    temperature: float = 0.1,
 ) -> tuple[float, float, list[GameReplay]]:
     """Play a set of evaluation games and return metrics.
 
@@ -208,9 +205,10 @@ def evaluate_games(
                     trie,
                     tokenizer,
                     device,
+                    temperature=temperature,
                 )
             else:
-                samples = sample_unconstrained(model, state_ids, device, tokenizer)
+                samples = sample_unconstrained(model, state_ids, device, tokenizer, temperature=temperature)
 
             guess, _word_ids = samples[0]
             new_state, _done = env.step(state, guess)
@@ -457,263 +455,81 @@ def train(
         print(f"  Group size: {group_size}")
     print()
 
+    from rl_steps import grpo_step, reinforce_step
+
     for step in range(start_step + 1, max_steps + 1):
-        # Sample batch_size random target words
         batch_targets = random.choices(answers, k=batch_size)
 
         if algorithm == "reinforce":
-            # --- REINFORCE training step ---
-            all_log_probs: list[Tensor] = []
-            all_rewards: list[float] = []
-
-            for target in batch_targets:
-                turn_lps, turn_rewards, replay = play_game_reinforce(
-                    model=model,
-                    env=env,
-                    target_word=target,
-                    tokenizer=tokenizer,
-                    answers=answers,
-                    trie=word_trie,
-                    device=device,
-                    constrained=constrained,
-                )
-
-                # Total reward for the game
-                total_reward = sum(turn_rewards)
-
-                # Concatenate all turn log probs: (total_chars,)
-                game_log_probs = torch.cat(turn_lps) if turn_lps else torch.zeros(1, device=device)
-
-                all_log_probs.append(game_log_probs)
-                all_rewards.append(total_reward)
-
-                # Track rolling metrics
-                recent_wins.append(replay.solved)
-                recent_guesses.append(replay.turns)
-                for g in replay.guesses:
-                    recent_valid.append(g in set(answers))
-
-            # Pad log probs to same length for batching
-            max_len = max(lp.shape[0] for lp in all_log_probs)
-            padded_lps = torch.zeros(batch_size, max_len, device=device)
-            for i, lp in enumerate(all_log_probs):
-                padded_lps[i, : lp.shape[0]] = lp
-
-            rewards_tensor = torch.tensor(all_rewards, dtype=torch.float32, device=device)
-
-            # Update baseline
-            baseline.update(rewards_tensor.mean().item())
-            baseline_val = torch.tensor(baseline.get(), dtype=torch.float32, device=device)
-
-            # Compute REINFORCE loss
-            loss = reinforce_loss(
-                log_probs=padded_lps,
-                rewards=rewards_tensor,
-                baseline=baseline_val,
+            step_metrics = reinforce_step(
+                model=model,
+                env=env,
+                batch_targets=batch_targets,
+                tokenizer=tokenizer,
+                answers=answers,
+                trie=word_trie,
+                device=device,
+                constrained=constrained,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                grad_clip=grad_clip,
+                baseline=baseline,
+                logger=logger,
+                step=step,
             )
-
-            # Backward + optimize
-            optimizer.zero_grad()
-            loss.backward()
-            grad_norm = clip_grad_norm(model, grad_clip)
-            optimizer.step()
-            scheduler.step()
-
-            # Logging
-            lr = optimizer.param_groups[0]["lr"]
-            reward_mean = rewards_tensor.mean().item()
-
-            logger.log_scalar("train/loss", loss.item(), step)
-            logger.log_scalar("train/reward_mean", reward_mean, step)
-            logger.log_scalar("train/grad_norm", grad_norm, step)
-            logger.log_scalar("train/lr", lr, step)
+            last_loss = step_metrics["loss"]
+            lr = step_metrics["lr"]
 
         else:
-            # --- GRPO training step ---
-            # Phase 1: Collect experience (sampling, no gradients needed)
-            all_experiences: list[list[TurnExperience]] = []
-            batch_rewards: list[float] = []
+            step_metrics, batch_replays, batch_rewards, batch_turn_details = grpo_step(
+                model=model,
+                ref_model=ref_model,
+                opener_model=opener_model,
+                env=env,
+                batch_targets=batch_targets,
+                tokenizer=tokenizer,
+                answers=answers,
+                trie=word_trie,
+                device=device,
+                constrained=constrained,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                grad_clip=grad_clip,
+                group_size=group_size,
+                clip_epsilon=clip_epsilon,
+                kl_beta=kl_beta,
+                ppo_epochs=rl_cfg.ppo_epochs,
+                curriculum_phase=rl_cfg.curriculum_phase,
+                max_turns=rl_cfg.max_turns,
+                logger=logger,
+                log_dir=logger.log_dir,
+                step=step,
+            )
+            if not step_metrics:
+                continue
 
-            batch_replays: list[GameReplay] = []
-            batch_turn_details: list[list[dict]] = []
-            curriculum_phase = rl_cfg.curriculum_phase
-            max_game_turns = rl_cfg.max_turns
+            last_loss = step_metrics["loss"]
+            lr = step_metrics["lr"]
 
-            for target in batch_targets:
-                # Phase 2: play opening turns with frozen opener model
-                init_state = None
-                init_candidates = None
-                opener_guesses: list[str] = []
-                opener_feedback: list[list[str]] = []
-                if curriculum_phase == 2 and opener_model is not None:
-                    init_state = env.reset(target_word=target)
-                    init_candidates = list(answers)
-                    for _ in range(2):
-                        if init_state.solved or init_state.failed:
-                            break
-                        st = game_state_to_prompt(init_state)
-                        si = torch.tensor(tokenizer.encode("".join(st)), dtype=torch.long, device=device)
-                        samples = sample_constrained(opener_model, si, word_trie, tokenizer, device, n_samples=1)
-                        guess = samples[0][0]
-                        init_state, _ = env.step(init_state, guess)
-                        fb = init_state.guesses[-1].feedback
-                        init_candidates = filter_candidates(init_candidates, guess, fb)
-                        opener_guesses.append(guess)
-                        opener_feedback.append([f.value for f in fb])
-
-                # Skip if opener already solved the puzzle
-                if init_state is not None and init_state.solved:
-                    continue
-
-                experiences, replay, game_reward, turn_details = collect_game_experience(
-                    model=model,
-                    ref_model=ref_model,
-                    env=env,
-                    target_word=target,
-                    tokenizer=tokenizer,
-                    answers=answers,
-                    trie=word_trie,
-                    device=device,
-                    group_size=group_size,
-                    constrained=constrained,
-                    max_turns=max_game_turns,
-                    initial_state=init_state,
-                    initial_candidates=init_candidates,
-                    solve_bonus=curriculum_phase != 1,
-                )
-                if not experiences:
-                    continue
-
-                # Prepend opener turns to replay for full game visibility
-                if opener_guesses:
-                    replay = GameReplay(
-                        target=replay.target,
-                        guesses=opener_guesses + replay.guesses,
-                        feedback=opener_feedback + replay.feedback,
-                        solved=replay.solved,
-                        turns=len(opener_guesses) + replay.turns,
-                    )
-
-                all_experiences.append(experiences)
-                batch_rewards.append(game_reward)
-                batch_replays.append(replay)
-                batch_turn_details.append(turn_details)
-
+            for replay in batch_replays:
                 recent_wins.append(replay.solved)
                 recent_guesses.append(replay.turns)
                 for g in replay.guesses:
                     recent_valid.append(g in set(answers))
 
-                for td in turn_details:
-                    chosen_detail = next((gd for gd in td["group"] if gd["guess"] == td["chosen"]), None)
-                    if chosen_detail:
-                        recent_info_gain.append(chosen_detail["actual"])
-                if turn_details:
-                    last_td = turn_details[-1]
+            for td_list in batch_turn_details:
+                for td in td_list:
+                    cd = next((gd for gd in td["group"] if gd["guess"] == td["chosen"]), None)
+                    if cd:
+                        recent_info_gain.append(cd["actual"])
+                if td_list:
+                    last_td = td_list[-1]
                     last_cd = next((gd for gd in last_td["group"] if gd["guess"] == last_td["chosen"]), None)
                     if last_cd:
                         n_before = last_td["candidates"]
                         actual = last_cd["actual"]
                         n_after = max(int(n_before / (2**actual)), 1) if actual > 0 else n_before
                         recent_candidates_remaining.append(n_after)
-
-            # Skip optimization if no experiences collected (all games solved by opener)
-            if not all_experiences:
-                continue
-
-            # Phase 2: Multiple optimization epochs on the same batch (PPO-style)
-            # old_log_probs are frozen from sampling; current_log_probs diverge
-            # with each gradient step, making clipping active.
-            ppo_epochs = rl_cfg.ppo_epochs
-            last_metrics: dict[str, float] = {}
-            last_loss = 0.0
-            last_grad_norm = 0.0
-
-            for _epoch in range(ppo_epochs):
-                epoch_loss = torch.tensor(0.0, device=device)
-                epoch_metrics: dict[str, list[float]] = {
-                    "policy_loss": [],
-                    "kl_div": [],
-                    "entropy": [],
-                    "clip_fraction": [],
-                }
-
-                for game_experiences in all_experiences:
-                    game_loss, game_metrics = compute_grpo_loss(
-                        model,
-                        game_experiences,
-                        clip_epsilon,
-                        kl_beta,
-                        trie=word_trie if constrained else None,
-                        tokenizer=tokenizer if constrained else None,
-                    )
-                    epoch_loss = epoch_loss + game_loss
-                    for key in epoch_metrics:
-                        if key in game_metrics:
-                            epoch_metrics[key].append(game_metrics[key])
-
-                epoch_loss = epoch_loss / batch_size
-
-                optimizer.zero_grad()
-                epoch_loss.backward()
-                last_grad_norm = clip_grad_norm(model, grad_clip)
-                optimizer.step()
-
-                last_loss = epoch_loss.item()
-                last_metrics = {k: sum(v) / max(len(v), 1) for k, v in epoch_metrics.items()}
-
-            scheduler.step()
-
-            # Logging (from last epoch)
-            lr = optimizer.param_groups[0]["lr"]
-            reward_mean = sum(batch_rewards) / len(batch_rewards) if batch_rewards else 0.0
-
-            logger.log_scalar("train/loss", last_loss, step)
-            logger.log_scalar("train/reward_mean", reward_mean, step)
-            logger.log_scalar("train/grad_norm", last_grad_norm, step)
-            logger.log_scalar("train/lr", lr, step)
-
-            for key, value in last_metrics.items():
-                logger.log_scalar(f"train/{key}", value, step)
-
-            # Save live data for dashboard
-            live_dir = logger.log_dir / "live"
-            live_dir.mkdir(exist_ok=True)
-            live_data = {
-                "step": step,
-                "loss": last_loss,
-                "reward_mean": reward_mean,
-                "rewards": batch_rewards,
-                "kl_div": last_metrics.get("kl_div", 0.0),
-                "clip_fraction": last_metrics.get("clip_fraction", 0.0),
-                "entropy": last_metrics.get("entropy", 0.0),
-                "games": [
-                    {
-                        "target": r.target,
-                        "guesses": r.guesses,
-                        "feedback": r.feedback,
-                        "solved": r.solved,
-                        "turns": r.turns,
-                        "reward": br,
-                        "turn_details": td,
-                    }
-                    for r, br, td in zip(batch_replays, batch_rewards, batch_turn_details, strict=True)
-                ],
-            }
-            (live_dir / "latest.json").write_text(json.dumps(live_data))
-
-            # Append to history for charts
-            history_line = json.dumps(
-                {
-                    "step": step,
-                    "loss": last_loss,
-                    "kl_div": last_metrics.get("kl_div", 0.0),
-                    "reward_mean": reward_mean,
-                    "clip_fraction": last_metrics.get("clip_fraction", 0.0),
-                }
-            )
-            with open(live_dir / "history.jsonl", "a") as hf:
-                hf.write(history_line + "\n")
 
         # Rolling metrics
         if recent_wins:
@@ -742,7 +558,7 @@ def train(
             if rl_cfg.curriculum_phase == 1:
                 print(
                     f"step {step:>5d}/{max_steps} | "
-                    f"loss {last_loss if algorithm == 'grpo' else loss.item():.4f} | "
+                    f"loss {last_loss:.4f} | "
                     f"info_gain {avg_ig:.2f} | "
                     f"candidates_left {avg_cr:.0f} | "
                     f"lr {lr:.2e} | "
@@ -751,7 +567,7 @@ def train(
             else:
                 print(
                     f"step {step:>5d}/{max_steps} | "
-                    f"loss {last_loss if algorithm == 'grpo' else loss.item():.4f} | "
+                    f"loss {last_loss:.4f} | "
                     f"win_rate {wr:.2%} | "
                     f"avg_guesses {ag:.1f} | "
                     f"lr {lr:.2e} | "
@@ -805,6 +621,7 @@ def train(
                 device=device,
                 group_size=group_size,
                 step=step,
+                constrained=constrained,
             )
             if step_data is not None:
                 step_data_dir = logger.log_dir / "step_data"
