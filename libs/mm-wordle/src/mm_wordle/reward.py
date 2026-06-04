@@ -91,8 +91,11 @@ def compute_reward(
     n_before = len(candidates_before)
     solved = all(f == LetterFeedback.GREEN for f in feedback)
 
+    if guess not in _VALID_WORDS:
+        return INVALID_WORD_PENALTY, 0.0, 0.0
+
     if n_before <= 1:
-        actual = SOLVED_BONUS if solved else 0.0
+        actual = 0.0
     else:
         candidates_after = filter_candidates(candidates_before, guess, feedback)
         n_after = max(len(candidates_after), 1)
@@ -102,9 +105,6 @@ def compute_reward(
 
     if not composite:
         return expected, actual, expected
-
-    if guess not in _VALID_WORDS:
-        return INVALID_WORD_PENALTY, actual, expected
 
     if n_before > 1:
         max_possible = math.log2(n_before)

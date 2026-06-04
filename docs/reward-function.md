@@ -1,82 +1,87 @@
 # Reward Function Design
 
+## Modes
+
+The reward function has two modes controlled by the `composite` flag.
+
+### Non-composite (`composite=False`) — Phase 1
+
+Used for Phase 1 RL (turns 1-2, learning openers).
+
+```
+reward = expected_info_gain(guess, candidates_before)
+```
+
+Returns the deterministic expected information gain in bits. Does not
+depend on the target word. Higher means the guess splits the candidate
+space more effectively.
+
+Invalid words receive `INVALID_WORD_PENALTY` (-10.0).
+
+### Composite (`composite=True`) — Phase 2
+
+Used for Phase 2 RL (turns 3-6, learning mid/endgame strategy).
+
+```
+if guess is not a valid word:
+    reward = INVALID_WORD_PENALTY
+
+elif candidates > 2:
+    reward = (expected_ig / log2(candidates)) * INFO_GAIN_SCALE
+
+elif candidates <= 2 and guess in candidates:
+    reward = (expected_ig / log2(candidates)) * INFO_GAIN_SCALE
+           + ENDGAME_BONUS
+           + SOLVED_BONUS (if all green)
+
+elif candidates <= 2 and guess not in candidates:
+    reward = (expected_ig / log2(candidates)) * INFO_GAIN_SCALE
+```
+
+When candidates = 1, expected info gain is 0 and log2(1) = 0, so the
+normalized info gain term is 0. The endgame bonus and solve bonus are
+the only signal.
+
+The info gain used is **expected** info gain — a deterministic measure
+of guess quality computed by simulating feedback against every candidate.
+It does not depend on the actual target word.
+
 ## Strategy Phases
 
-Optimal Wordle play has three distinct phases:
+1. **Opener (turn 1-2):** Play high-coverage words (≥5.5 bits expected
+   info gain). Threshold: top ~50 words out of 2315.
 
-1. **Opener (turn 1-2):** Play high-coverage words that eliminate large portions of
-   the candidate space. Words like "slate" or "crane" that test common letters.
+2. **Midgame (3+ candidates):** Play discovery words that distinguish
+   between remaining candidates. These may NOT be candidates themselves.
+   Normalized info gain rewards any word that splits well.
 
-2. **Midgame (3+ candidates):** Play "discovery" words that distinguish between
-   remaining candidates. These words may NOT be candidates themselves — the goal
-   is elimination, not solving.
+3. **Endgame (1-2 candidates):** Guess a candidate. Discovery is no
+   longer useful. Endgame bonus rewards guessing from the candidate set.
 
-3. **Endgame (1-2 candidates):** Guess a candidate. Discovery is no longer useful.
+## Invalid Word Penalty
 
-## Reward Formula
-
-```
-reward = normalized_info_gain + endgame_bonus + solve_bonus
-```
-
-### Normalized Info Gain
-
-```
-max_possible = log2(n_candidates)
-normalized = info_gain / max_possible    # 0 to 1
-reward_ig = normalized * INFO_GAIN_SCALE
-```
-
-Info gain is normalized by the maximum possible info gain at that game state.
-This puts all turns on the same scale — a 50% efficient opener and a 90%
-efficient midgame play produce comparable reward magnitudes.
-
-`INFO_GAIN_SCALE` is set high enough that optimal information gathering always
-dominates over lucky outcomes during opener and midgame.
-
-When candidates = 1, max_possible = 0 and info gain is 0. The endgame bonus
-takes over.
-
-### Endgame Bonus
-
-```
-if n_candidates <= 2 and guess in candidates:
-    reward += ENDGAME_BONUS
-```
-
-Only activates when candidates are 1-2. Rewards guessing from the candidate
-set when discovery is no longer useful.
-
-### Solve Bonus
-
-```
-if solved and n_candidates <= 2:
-    reward += SOLVED_BONUS
-```
-
-Only given when solving IS the right strategy (endgame). Solving with 10
-candidates is luck, not skill — no bonus. Solving with 1-2 candidates is
-the intended play and gets rewarded.
-
-### Invalid Word Penalty
-
-```
-if guess not in valid_words:
-    reward = INVALID_WORD_PENALTY
-```
-
-Any guess that isn't a valid Wordle word gets a fixed negative reward.
-This gives GRPO clear signal: if one sample in the group is valid and
-another is invalid, the valid one gets strong positive advantage.
+Both modes penalize invalid words (words not in the Wordle valid word
+list of ~12,972 words). The penalty is -10.0, worse than any valid
+word's reward.
 
 ## Constants
 
 | Constant | Value | Rationale |
 |----------|-------|-----------|
 | INFO_GAIN_SCALE | 10.0 | Dominates reward during opener and midgame |
-| ENDGAME_BONUS | 3.0 | Comparable to a good normalized info gain |
-| SOLVED_BONUS | 5.0 | Only in endgame, dominates when solving is optimal |
+| ENDGAME_BONUS | 3.0 | Signals "guess from the candidate set" |
+| SOLVED_BONUS | 5.0 | Only in endgame, rewards solving |
 | INVALID_WORD_PENALTY | -10.0 | Worse than any valid word's reward |
+
+## Return Value
+
+`compute_reward` returns `(reward, actual_info_gain, expected_info_gain)`.
+
+- `reward`: the training signal (per-turn, never summed across turns)
+- `actual_info_gain`: how many bits were actually gained (depends on
+  target word, used for logging only)
+- `expected_info_gain`: the deterministic expected info gain (used as
+  reward in non-composite mode, normalized in composite mode)
 
 ## Reward by Phase
 
@@ -85,10 +90,4 @@ another is invalid, the valid one gets strong positive advantage.
 | Opener | 2315 | normalized_ig * 10 (max ~5.3) |
 | Midgame | 3-100 | normalized_ig * 10 (max ~10) |
 | Endgame | 1-2 | endgame_bonus (3) + solve_bonus (5) = 8 |
-
-In the midgame, a discovery word that achieves 100% of max info gain scores 10.
-A lucky solve with lower info gain scores less. Info gain drives the policy
-toward optimal play, not gambling.
-
-In the endgame, the combined bonus (8) exceeds typical midgame rewards, so the
-model learns to shift from discovery to solving when candidates are low.
+| Invalid word | any | -10 |

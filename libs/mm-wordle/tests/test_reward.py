@@ -106,10 +106,16 @@ class TestCompositeReward:
         r_wrong, _, _ = compute_reward("slate", fb_wrong, candidates, composite=True)
         assert r_right > r_wrong
 
-    def test_invalid_word_gets_penalty(self) -> None:
+    def test_invalid_word_gets_penalty_composite(self) -> None:
         answers = load_answers()
         fb = [LetterFeedback.GRAY] * 5
         reward, _, _ = compute_reward("zzzzz", fb, list(answers), composite=True)
+        assert reward == INVALID_WORD_PENALTY
+
+    def test_invalid_word_gets_penalty_non_composite(self) -> None:
+        answers = load_answers()
+        fb = [LetterFeedback.GRAY] * 5
+        reward, _, _ = compute_reward("folka", fb, list(answers), composite=False)
         assert reward == INVALID_WORD_PENALTY
 
     def test_invalid_word_worse_than_any_valid(self) -> None:

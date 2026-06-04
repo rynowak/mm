@@ -29,6 +29,7 @@ from mm_training import (
     seed_everything,
 )
 from mm_wordle import WordleEnv, compute_reward, load_answers
+from mm_wordle.reward import INVALID_WORD_PENALTY
 from mm_wordle.solver import filter_candidates
 from torch import Tensor
 
@@ -216,6 +217,9 @@ def train(
                         guess = "zzzzz"
                     state, _ = env.step(state, guess)
                     fb = state.guesses[-1].feedback
+                    composite = rl_cfg.curriculum_phase != 1
+                    r, _, _ = compute_reward(guess, fb, candidates, composite=composite)
+                    replay_rewards.append(r)
                     candidates = filter_candidates(candidates, guess, fb)
                     replay_guesses.append(guess)
                     replay_feedback.append([f.value for f in fb])
@@ -228,7 +232,7 @@ def train(
                             "feedback": replay_feedback,
                             "solved": True,
                             "turns": state.turn,
-                            "turn_rewards": [],
+                            "turn_rewards": replay_rewards,
                         }
                     )
                     continue
@@ -248,7 +252,7 @@ def train(
                 composite = rl_cfg.curriculum_phase != 1
                 for g in group_guesses:
                     if len(g) != 5:
-                        rewards.append(0.0)
+                        rewards.append(INVALID_WORD_PENALTY)
                         continue
                     sim_state, _ = env.step(state, g)
                     fb = sim_state.guesses[-1].feedback
@@ -301,9 +305,13 @@ def train(
 
         n_turns = len(all_prompt_ids)
         last_loss = 0.0
+        last_kl = 0.0
+        last_clip = 0.0
 
         for _epoch in range(rl_cfg.ppo_epochs):
             epoch_loss = torch.tensor(0.0, device=device)
+            epoch_kl = 0.0
+            epoch_clip = 0.0
             for i in range(n_turns):
                 current_lps = torch.stack(
                     [compute_guess_log_probs(model, all_prompt_ids[i], wid, letter_mask) for wid in all_word_ids[i]]
@@ -316,6 +324,8 @@ def train(
 
                 kl = (current_lps - all_ref_lp[i]).exp() - 1 - (current_lps - all_ref_lp[i])
                 epoch_loss = epoch_loss + policy_loss + rl_cfg.kl_beta * kl.mean()
+                epoch_kl += kl.mean().item()
+                epoch_clip += ((ratio - 1).abs() > rl_cfg.clip_epsilon).float().mean().item()
 
             epoch_loss = epoch_loss / n_turns
             optimizer.zero_grad()
@@ -323,14 +333,23 @@ def train(
             clip_grad_norm(model, rl_cfg.grad_clip)
             optimizer.step()
             last_loss = epoch_loss.item()
+            last_kl = epoch_kl / n_turns
+            last_clip = epoch_clip / n_turns
 
         scheduler.step()
 
-        # Live data
         live_dir = logger.log_dir / "live"
         live_dir.mkdir(exist_ok=True)
-        live_data = {"step": step, "loss": last_loss, "games": batch_replays}
+        live_data = {
+            "step": step,
+            "loss": last_loss,
+            "kl_div": last_kl,
+            "clip_fraction": last_clip,
+            "games": batch_replays,
+        }
         (live_dir / "latest.json").write_text(json.dumps(live_data))
+        with open(live_dir / "history.jsonl", "a") as hf:
+            hf.write(json.dumps({"step": step, "loss": last_loss, "kl_div": last_kl}) + "\n")
 
         elapsed = time.time() - t_start
         if step % 10 == 0 or step == 1:

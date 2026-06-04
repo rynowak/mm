@@ -219,7 +219,10 @@ regressing on valid word rate.
 ### Step 5: RL Phase 2 (Mid/Late game, turns 3-6)
 
 GRPO with composite reward (normalized info gain + endgame bonus +
-solve bonus). Opener model frozen from Phase 1.
+solve bonus + invalid word penalty). Opener model frozen from Phase 1.
+
+Invalid words receive -10.0 penalty in both phases. See
+`docs/reward-function.md` for the full reward specification.
 
 ## Eval Metrics
 
