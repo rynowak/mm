@@ -46,23 +46,29 @@ class TestNonCompositeReward:
 
 
 class TestCompositeReward:
-    def test_normalized_ig_scales_to_info_gain_scale(self) -> None:
-        """A perfect info gain guess should score close to INFO_GAIN_SCALE."""
-        candidates = ["crane", "crate"]
-        fb = WordleEnv.compute_feedback("crane", "crane")
-        reward, _, _ = compute_reward("crane", fb, candidates, composite=True)
-        # With 2 candidates, max_possible = 1 bit. A perfect split gets normalized=1.0.
-        # Plus endgame bonus + solve bonus since candidates=2 and solved.
-        assert reward >= INFO_GAIN_SCALE * 0.5
+    def test_best_answer_word_scores_info_gain_scale(self) -> None:
+        """The best answer word for this candidate set should score INFO_GAIN_SCALE."""
 
-    def test_opener_info_gain_dominates(self) -> None:
-        """At turn 1, info gain should be the dominant reward."""
         answers = load_answers()
-        fb = WordleEnv.compute_feedback("slate", "crane")
-        reward, _, _ = compute_reward("slate", fb, list(answers), composite=True)
-        # slate gets ~5.86/11.2 = 0.52 normalized, * 10 = 5.2
-        assert reward > 4.0
+        candidates = list(answers)
+        best_word = max(answers, key=lambda w: expected_info_gain(w, candidates))
+        fb = WordleEnv.compute_feedback(best_word, "crane")
+        reward, _, _ = compute_reward(best_word, fb, candidates, composite=True)
+        assert abs(reward - INFO_GAIN_SCALE) < 0.01
+
+    def test_suboptimal_word_scores_less(self) -> None:
+        """A word with lower info gain than the best should score < INFO_GAIN_SCALE."""
+        answers = load_answers()
+        fb = WordleEnv.compute_feedback("fuzzy", "crane")
+        reward, _, _ = compute_reward("fuzzy", fb, list(answers), composite=True)
         assert reward < INFO_GAIN_SCALE
+
+    def test_best_opener_scores_10(self) -> None:
+        """The best opener (raise) should score exactly INFO_GAIN_SCALE."""
+        answers = load_answers()
+        fb = WordleEnv.compute_feedback("raise", "crane")
+        reward, _, _ = compute_reward("raise", fb, list(answers), composite=True)
+        assert abs(reward - INFO_GAIN_SCALE) < 0.01
 
     def test_midgame_no_solve_bonus(self) -> None:
         """Solving with 3+ candidates should NOT get solve bonus."""
@@ -93,27 +99,23 @@ class TestCompositeReward:
         assert reward >= ENDGAME_BONUS + SOLVED_BONUS
 
     def test_no_endgame_bonus_at_3_candidates(self) -> None:
+        from mm_wordle.reward import best_expected_info_gain
+
         candidates = ["crane", "crate", "craze"]
         fb = WordleEnv.compute_feedback("crane", "crate")
         reward, _, _ = compute_reward("crane", fb, candidates, composite=True)
         ig = expected_info_gain("crane", candidates)
-        import math
-
-        normalized = ig / math.log2(len(candidates)) * INFO_GAIN_SCALE
-        # Should be just normalized info gain, no bonus
+        best = best_expected_info_gain(candidates)
+        normalized = ig / best * INFO_GAIN_SCALE
         assert abs(reward - normalized) < 1e-6
 
     def test_solve_bonus_only_endgame(self) -> None:
-        """Solve bonus only fires when candidates <= 2."""
-        # Solve with many candidates — no bonus
-        answers = load_answers()
+        """Solve with many candidates gets no solve bonus."""
+        candidates = ["crane", "crate", "craze"]
         fb_solved = [LetterFeedback.GREEN] * 5
-        r_lucky, _, _ = compute_reward("crane", fb_solved, list(answers), composite=True)
-
-        # Solve with 1 candidate — bonus
-        r_skill, _, _ = compute_reward("crane", fb_solved, ["crane"], composite=True)
-
-        assert r_skill > r_lucky
+        reward, _, _ = compute_reward("crane", fb_solved, candidates, composite=True)
+        # No solve bonus (n_before=3 > 2), just normalized info gain
+        assert reward <= INFO_GAIN_SCALE
 
     def test_grpo_variance_endgame(self) -> None:
         candidates = ["crane"]

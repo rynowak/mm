@@ -44,12 +44,26 @@ def _compute_expected_info_gain(guess: str, candidates: list[str]) -> float:
     return expected
 
 
+def _best_expected_info_gain(candidates: list[str]) -> float:
+    """Find the best expected info gain across all answer words for this candidate set."""
+    if len(candidates) <= 1:
+        return 0.0
+
+    best = 0.0
+    for word in _ANSWERS:
+        ig = _compute_expected_info_gain(word, candidates)
+        if ig > best:
+            best = ig
+    return best
+
+
 class ExpectedInfoGainCache:
     """Precomputed expected info gain for the full answer list."""
 
     def __init__(self) -> None:
         self._full_list_cache: dict[str, float] = {}
         self._full_list_key = tuple(_ANSWERS)
+        self._best_full_list: float | None = None
 
     def get(self, guess: str, candidates: list[str]) -> float:
         if tuple(candidates) == self._full_list_key:
@@ -58,10 +72,18 @@ class ExpectedInfoGainCache:
             return self._full_list_cache[guess]
         return _compute_expected_info_gain(guess, candidates)
 
+    def get_best(self, candidates: list[str]) -> float:
+        if tuple(candidates) == self._full_list_key:
+            if self._best_full_list is None:
+                self._best_full_list = max(self._full_list_cache.values()) if self._full_list_cache else 0.0
+            return self._best_full_list
+        return _best_expected_info_gain(candidates)
+
     def precompute(self) -> None:
         answers = list(_ANSWERS)
         for word in answers:
             self._full_list_cache[word] = _compute_expected_info_gain(word, answers)
+        self._best_full_list = max(self._full_list_cache.values())
 
 
 _CACHE = ExpectedInfoGainCache()
@@ -75,6 +97,10 @@ def expected_info_gain(guess: str, candidates: list[str]) -> float:
     return _CACHE.get(guess, candidates)
 
 
+def best_expected_info_gain(candidates: list[str]) -> float:
+    return _CACHE.get_best(candidates)
+
+
 def compute_reward(
     guess: str,
     feedback: list[LetterFeedback],
@@ -86,7 +112,8 @@ def compute_reward(
     Returns (reward, actual_info_gain, expected_info_gain).
 
     When composite=False: reward is pure expected info gain (unnormalized).
-    When composite=True: reward is normalized info gain + endgame bonus + solve bonus.
+    When composite=True: reward is normalized against the best available
+    word's info gain, scaled by INFO_GAIN_SCALE, plus endgame/solve bonuses.
     """
     n_before = len(candidates_before)
     solved = all(f == LetterFeedback.GREEN for f in feedback)
@@ -107,8 +134,8 @@ def compute_reward(
         return expected, actual, expected
 
     if n_before > 1:
-        max_possible = math.log2(n_before)
-        normalized = expected / max_possible if max_possible > 0 else 0.0
+        best = best_expected_info_gain(candidates_before)
+        normalized = expected / best if best > 0 else 0.0
         reward = normalized * INFO_GAIN_SCALE
     else:
         reward = 0.0
