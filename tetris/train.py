@@ -32,7 +32,7 @@ BATCH_SIZE = 64
 GAMMA = 0.99
 EPSILON_START = 1.0
 EPSILON_END = 0.01
-EPSILON_DECAY = 0.995
+EPSILON_DECAY_STEPS = 300_000
 REPLAY_CAPACITY = 50_000
 TARGET_UPDATE_FREQ = 200
 MAX_STEPS_PER_GAME = 500
@@ -77,11 +77,9 @@ class DQN(nn.Module):
     def __init__(self) -> None:
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(FEATURE_SIZE, 128),
+            nn.Linear(FEATURE_SIZE, 64),
             nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, mm_tetris.NUM_ACTIONS),
+            nn.Linear(64, mm_tetris.NUM_ACTIONS),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -211,7 +209,7 @@ def train(on_event: EventCallback | None = None) -> None:
             _append_live("metrics.jsonl", event)
 
     seed_everything(SEED)
-    device = get_device()
+    device = torch.device("cpu")
     print(f"Device: {device}")
 
     policy_net = DQN().to(device)
@@ -282,10 +280,11 @@ def train(on_event: EventCallback | None = None) -> None:
             game_seed += 1
             state = mm_tetris.reset(seed=game_seed)
             game_steps = 0
-            epsilon = max(EPSILON_END, epsilon * EPSILON_DECAY)
             emit({"type": "game_start", "game_id": game_seed, "piece": state.current_piece})
         else:
             state = new_state
+
+        epsilon = max(EPSILON_END, EPSILON_START - total_steps * (EPSILON_START - EPSILON_END) / EPSILON_DECAY_STEPS)
 
         if len(replay) < BATCH_SIZE:
             continue
