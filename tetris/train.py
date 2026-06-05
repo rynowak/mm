@@ -196,11 +196,17 @@ def train(on_event: EventCallback | None = None) -> None:
     for f in _LIVE_DIR.iterdir():
         f.unlink()
 
+    last_board_write = 0.0
+
     def emit(event: dict[str, Any]) -> None:
+        nonlocal last_board_write
         if on_event is not None:
             on_event(event)
         if event["type"] == "step":
-            _write_live("board.json", event)
+            now = time.monotonic()
+            if now - last_board_write > 0.2:
+                _write_live("board.json", event)
+                last_board_write = now
         elif event["type"] == "episode_end":
             _append_live("metrics.jsonl", event)
 
