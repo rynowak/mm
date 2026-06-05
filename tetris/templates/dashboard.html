@@ -941,14 +941,54 @@ function renderStatus(s) {
 }
 
 // =========================================================================
+// File-based live polling (works when training runs in a separate process)
+// =========================================================================
+let lastMetricEpisode = 0;
+
+function pollBoard() {
+    if (mode !== 'live') return;
+    fetch('/api/live/board')
+        .then(r => r.json())
+        .then(ev => {
+            if (ev.type === 'step') {
+                drawBoard(ev.grid);
+                updateBoardInfo(ev.piece, ev.lines_cleared, ev.score);
+            }
+        })
+        .catch(() => {});
+}
+
+function pollMetrics() {
+    fetch('/api/live/metrics?since=' + lastMetricEpisode)
+        .then(r => r.json())
+        .then(entries => {
+            if (!entries.length) return;
+            for (const m of entries) {
+                if (m.episode >= lastMetricEpisode) {
+                    addMetricPoint(m);
+                    updateStats(m);
+                    lastMetricEpisode = m.episode + 1;
+                }
+            }
+            scheduleChartUpdate();
+        })
+        .catch(() => {});
+}
+
+function startLivePolling() {
+    setInterval(pollBoard, 500);
+    setInterval(pollMetrics, 2000);
+}
+
+// =========================================================================
 // Init
 // =========================================================================
 drawBoard(null);
-startPlayback();
 connect();
 fetchChangelog();
 fetchStatus();
 startChangelogPolling();
+startLivePolling();
 </script>
 </body>
 </html>

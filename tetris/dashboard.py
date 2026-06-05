@@ -4,9 +4,7 @@ import asyncio
 import contextlib
 import json
 import queue
-import threading
 from collections import deque
-from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -96,6 +94,31 @@ async def get_changelog() -> list[dict[str, Any]]:
     for line in log_path.read_text().strip().splitlines():
         if line.strip():
             entries.append(json.loads(line))
+    return entries
+
+
+@app.get("/api/live/board")
+async def get_live_board() -> dict[str, Any]:
+    board_path = Path(__file__).parent / ".live" / "board.json"
+    if not board_path.exists():
+        return {"type": "empty"}
+    try:
+        return json.loads(board_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {"type": "empty"}
+
+
+@app.get("/api/live/metrics")
+async def get_live_metrics(since: int = 0) -> list[dict[str, Any]]:
+    metrics_path = Path(__file__).parent / ".live" / "metrics.jsonl"
+    if not metrics_path.exists():
+        return []
+    entries: list[dict[str, Any]] = []
+    for line in metrics_path.read_text().strip().splitlines():
+        if line.strip():
+            e = json.loads(line)
+            if e.get("episode", 0) >= since:
+                entries.append(e)
     return entries
 
 

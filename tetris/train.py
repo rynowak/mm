@@ -6,11 +6,13 @@ Tetris for a fixed time budget, then evaluates and reports the metric.
 Metric: val_avg_lines (average lines cleared per game over evaluation games).
 """
 
+import json
 import random
 import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import mm_tetris
@@ -124,12 +126,11 @@ def encode_state(state: mm_tetris.TetrisState, device: torch.device) -> torch.Te
     holes = state.count_holes()
     bumpiness = sum(abs(heights[i] - heights[i + 1]) for i in range(len(heights) - 1))
     normed_heights = [h / mm_tetris.GRID_HEIGHT for h in heights]
-    height_diffs = [
-        (heights[i] - heights[i + 1]) / mm_tetris.GRID_HEIGHT for i in range(len(heights) - 1)
-    ] + [0.0]
+    height_diffs = [(heights[i] - heights[i + 1]) / mm_tetris.GRID_HEIGHT for i in range(len(heights) - 1)] + [0.0]
     piece_onehot = [0.0] * mm_tetris.NUM_PIECE_TYPES
     piece_onehot[mm_tetris.PIECE_NAMES.index(state.current_piece)] = 1.0
-    aggregate = [max_h / mm_tetris.GRID_HEIGHT, holes / 40.0, bumpiness / 40.0, sum(heights) / (mm_tetris.GRID_HEIGHT * mm_tetris.GRID_WIDTH)]
+    total_height = sum(heights) / (mm_tetris.GRID_HEIGHT * mm_tetris.GRID_WIDTH)
+    aggregate = [max_h / mm_tetris.GRID_HEIGHT, holes / 40.0, bumpiness / 40.0, total_height]
     features = normed_heights + height_diffs + piece_onehot + aggregate
     return torch.tensor(features, dtype=torch.float32, device=device)
 
@@ -176,10 +177,32 @@ def evaluate(policy_net: DQN, device: torch.device, num_games: int = EVAL_GAMES)
 # ---------------------------------------------------------------------------
 # Training loop
 # ---------------------------------------------------------------------------
+_LIVE_DIR = Path(__file__).parent / ".live"
+
+
+def _write_live(name: str, data: dict[str, Any]) -> None:
+    _LIVE_DIR.mkdir(exist_ok=True)
+    _LIVE_DIR.joinpath(name).write_text(json.dumps(data))
+
+
+def _append_live(name: str, data: dict[str, Any]) -> None:
+    _LIVE_DIR.mkdir(exist_ok=True)
+    with _LIVE_DIR.joinpath(name).open("a") as f:
+        f.write(json.dumps(data) + "\n")
+
+
 def train(on_event: EventCallback | None = None) -> None:
+    _LIVE_DIR.mkdir(exist_ok=True)
+    for f in _LIVE_DIR.iterdir():
+        f.unlink()
+
     def emit(event: dict[str, Any]) -> None:
         if on_event is not None:
             on_event(event)
+        if event["type"] == "step":
+            _write_live("board.json", event)
+        elif event["type"] == "episode_end":
+            _append_live("metrics.jsonl", event)
 
     seed_everything(SEED)
     device = get_device()
