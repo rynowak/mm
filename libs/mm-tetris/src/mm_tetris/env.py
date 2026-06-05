@@ -106,13 +106,22 @@ def valid_action_mask(state: TetrisState) -> list[bool]:
 
 def _find_drop_row(grid: list[list[bool]], shape: PieceShape, col: int) -> int:
     """Drop piece from top, return the row where it lands. Returns -1 if blocked at spawn."""
-    last_valid = -1
-    for row in range(GRID_HEIGHT - shape.height + 1):
-        if _fits(grid, shape, row, col):
-            last_valid = row
-        else:
-            break
-    return last_valid
+    # For each piece cell, find the max row so it doesn't overlap a filled cell below it.
+    drop_row = GRID_HEIGHT - shape.height
+    for dr, dc in shape.cells:
+        c = col + dc
+        # Scan column c for the first filled row below where this cell could start
+        for r in range(GRID_HEIGHT):
+            if grid[r][c]:
+                max_r = r - dr - 1
+                if max_r < drop_row:
+                    drop_row = max_r
+                break
+    if drop_row < 0:
+        return -1
+    if _fits(grid, shape, drop_row, col):
+        return drop_row
+    return -1
 
 
 def _fits(grid: list[list[bool]], shape: PieceShape, row: int, col: int) -> bool:
