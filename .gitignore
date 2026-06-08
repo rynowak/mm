@@ -7,5 +7,6 @@ build/
 runs/
 *.pt
 *.pth
+*.npy
 .ruff_cache/
 .claude/worktrees/

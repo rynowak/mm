@@ -32,6 +32,16 @@ class TestFilterCandidates:
         assert "crane" not in result  # has 'n'
         assert "blown" not in result  # has all gray letters
 
+    def test_green_plus_yellow_requires_two_of_letter(self) -> None:
+        # Guess "aliya" vs target "alack": a(green) l(green) i,y(gray) a(yellow).
+        # The trailing yellow 'a' means the answer has a SECOND 'a' beyond the green.
+        candidates = ["alack", "allus", "aloft"]
+        fb = WordleEnv.compute_feedback("aliya", "alack")
+        result = filter_candidates(candidates, "aliya", fb)
+        assert "alack" in result  # two a's — consistent
+        assert "allus" not in result  # only one 'a' — must be excluded
+        assert "aloft" not in result  # only one 'a'
+
 
 class TestSolvers:
     def test_random_completes_game(self) -> None:

@@ -19,26 +19,14 @@ def filter_candidates(candidates: list[str], guess: str, feedback: list[LetterFe
 
 
 def _is_consistent(candidate: str, guess: str, feedback: list[LetterFeedback]) -> bool:
-    """Check if a candidate word is consistent with the feedback from a guess."""
-    for i, (g_ch, fb) in enumerate(zip(guess, feedback, strict=True)):
-        if fb == LetterFeedback.GREEN:
-            if candidate[i] != g_ch:
-                return False
-        elif fb == LetterFeedback.YELLOW:
-            if candidate[i] == g_ch:
-                return False
-            if g_ch not in candidate:
-                return False
-        elif fb == LetterFeedback.GRAY:
-            count_in_guess = sum(
-                1
-                for j in range(len(guess))
-                if guess[j] == g_ch and feedback[j] in (LetterFeedback.GREEN, LetterFeedback.YELLOW)
-            )
-            count_in_candidate = candidate.count(g_ch)
-            if count_in_candidate > count_in_guess:
-                return False
-    return True
+    """Check if a candidate is consistent with the feedback from a guess.
+
+    Defined by the ground truth: a candidate survives iff guessing ``guess``
+    against it would have produced exactly this feedback. This correctly handles
+    duplicate letters (e.g. a green + yellow of the same letter requires two of
+    that letter), which the previous per-letter constraint logic got wrong.
+    """
+    return WordleEnv.compute_feedback(guess, candidate) == feedback
 
 
 def entropy_guess(candidates: list[str], valid_guesses: list[str]) -> str:
