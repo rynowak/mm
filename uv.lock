@@ -903,10 +903,14 @@ version = "0.1.0"
 source = { editable = "libs/mm-wordle" }
 dependencies = [
     { name = "mm-tokenizers" },
+    { name = "numpy" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "mm-tokenizers", editable = "libs/mm-tokenizers" }]
+requires-dist = [
+    { name = "mm-tokenizers", editable = "libs/mm-tokenizers" },
+    { name = "numpy", specifier = ">=2.0" },
+]
 
 [[package]]
 name = "mpmath"

@@ -1,6 +1,12 @@
 """Tests for word lists."""
 
-from mm_wordle.words import all_valid_words, load_answers, load_valid_guesses
+from mm_wordle.words import (
+    all_valid_words,
+    load_answers,
+    load_full_word_set,
+    load_valid_guesses,
+    split_answers,
+)
 
 
 def test_load_answers_returns_list():
@@ -52,3 +58,54 @@ def test_known_words_present():
     answers = set(load_answers())
     for word in ["crane", "slate", "audio", "arise", "about"]:
         assert word in answers, f"Expected '{word}' in answers"
+
+
+# --- V3 full word set + hold-out split ---
+
+
+def test_full_word_set_size():
+    words = load_full_word_set()
+    assert len(words) == 14855
+
+
+def test_full_word_set_sorted_unique_five_letters():
+    words = load_full_word_set()
+    assert words == sorted(words), "full word set must be sorted"
+    assert len(set(words)) == len(words), "full word set must be unique"
+    for word in words:
+        assert len(word) == 5 and word.isalpha() and word.islower()
+
+
+def test_split_is_deterministic():
+    train_a, holdout_a = split_answers(holdout_frac=0.10, seed=1234)
+    train_b, holdout_b = split_answers(holdout_frac=0.10, seed=1234)
+    assert train_a == train_b
+    assert holdout_a == holdout_b
+
+
+def test_split_seed_changes_partition():
+    _, holdout_a = split_answers(holdout_frac=0.10, seed=1234)
+    _, holdout_b = split_answers(holdout_frac=0.10, seed=9999)
+    assert set(holdout_a) != set(holdout_b)
+
+
+def test_split_disjoint_and_covers_universe():
+    """The hold-out hard gate: train and hold-out partition the full set exactly."""
+    train, holdout = split_answers(holdout_frac=0.10, seed=1234)
+    train_set, holdout_set = set(train), set(holdout)
+    universe = set(load_full_word_set())
+    assert train_set.isdisjoint(holdout_set), "train and hold-out must be disjoint"
+    assert train_set | holdout_set == universe, "train ∪ hold-out must equal the full set"
+    assert len(train) + len(holdout) == len(universe)
+
+
+def test_split_holdout_fraction():
+    train, holdout = split_answers(holdout_frac=0.10, seed=1234)
+    assert len(holdout) == int(14855 * 0.10)
+    assert len(holdout) > 0 and len(train) > 0
+
+
+def test_split_lists_sorted():
+    train, holdout = split_answers(holdout_frac=0.10, seed=1234)
+    assert train == sorted(train)
+    assert holdout == sorted(holdout)

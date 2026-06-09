@@ -1,0 +1,23 @@
+# RL phase 1: train openers (turns 1-2) on raw expected info gain.
+# Warm-start from the SFT checkpoint. Architecture inherited from the checkpoint.
+training:
+  seed: 42
+  learning_rate: 1e-5
+  weight_decay: 0.01
+  warmup_steps: 50
+  max_steps: 2000
+  grad_clip: 1.0
+  eval_interval: 500
+  checkpoint_interval: 500
+  group_size: 8
+  clip_epsilon: 0.2
+  kl_beta: 0.2
+  ppo_epochs: 2
+  batch_size: 8
+  curriculum_phase: 1
+  max_turns: 2
+  probe_top_k: 300
+  step_metrics_interval: 10
+  win_rate_interval: 50
+  step_eval_games: 16
+  eval_games: 256

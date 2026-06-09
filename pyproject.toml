@@ -52,4 +52,4 @@ line-length = 120
 select = ["E", "F", "I", "UP", "B", "SIM", "TCH"]
 
 [tool.pytest.ini_options]
-testpaths = ["libs", "wordle/tests", "wordle2/tests"]
+testpaths = ["libs", "wordle/tests", "wordle2/tests", "wordle3/tests"]

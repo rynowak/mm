@@ -1,5 +1,9 @@
 """Wordle word lists."""
 
+import random
+from functools import cache
+from importlib import resources
+
 ANSWERS: tuple[str, ...] = (
     "aback",
     "abase",
@@ -12993,3 +12997,37 @@ def load_valid_guesses() -> list[str]:
 def all_valid_words() -> set[str]:
     """Return the union of answers and valid guesses."""
     return set(ANSWERS) | set(VALID_GUESSES)
+
+
+@cache
+def _full_word_set_cached() -> tuple[str, ...]:
+    """Load and cache the V3 14,855-word valid set from package data."""
+    text = resources.files("mm_wordle").joinpath("data/valid_words_14855.txt").read_text(encoding="utf-8")
+    return tuple(line.strip() for line in text.splitlines() if line.strip())
+
+
+def load_full_word_set() -> list[str]:
+    """Return the full V3 valid word set (14,855 words, sorted).
+
+    This is the V3 universe: both the answer universe ``U`` and the valid guess
+    set ``G``. V1/V2 keep using ``load_answers``/``load_valid_guesses`` unchanged.
+    """
+    return list(_full_word_set_cached())
+
+
+def split_answers(holdout_frac: float = 0.10, seed: int = 1234) -> tuple[list[str], list[str]]:
+    """Deterministically split the full word set into (train_answers, holdout).
+
+    Same ``(holdout_frac, seed)`` always yields the same split. Hold-out words are
+    excluded as *answers* in SFT/RL but remain valid guesses and candidates. The
+    returned lists are alphabetically sorted; their union is the full word set and
+    they are disjoint.
+    """
+    words = list(_full_word_set_cached())
+    rng = random.Random(seed)
+    shuffled = words.copy()
+    rng.shuffle(shuffled)
+    n_holdout = int(len(shuffled) * holdout_frac)
+    holdout = sorted(shuffled[:n_holdout])
+    train = sorted(shuffled[n_holdout:])
+    return train, holdout

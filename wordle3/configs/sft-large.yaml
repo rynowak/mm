@@ -1,0 +1,20 @@
+# SFT on golden games, warm-started from the 10M pre-train checkpoint.
+# Architecture is inherited from the checkpoint (no model section).
+training:
+  seed: 42
+  batch_size: 256
+  learning_rate: 1e-4
+  weight_decay: 0.1
+  warmup_steps: 100
+  max_steps: 8000
+  grad_clip: 1.0
+  eval_interval: 1000
+  checkpoint_interval: 4000
+  amp: true
+  compile: true
+  step_metrics_interval: 1
+  win_rate_interval: 50
+  step_eval_games: 16
+  eval_games: 256
+  n_golden_games: 4000
+  replay_frac: 0.05
