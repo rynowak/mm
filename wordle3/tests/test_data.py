@@ -1,9 +1,9 @@
 """Tests for the V3 word-only pre-train data pipeline."""
 
 import torch
-from mm_wordle import ConstraintTokenizer
+from mm_wordle import ConstraintTokenizer, PatternMatrix, load_full_word_set
 
-from wordle3.data import WordOnlyDataset, collate_padded
+from wordle3.data import WordOnlyDataset, collate_padded, generate_retrieval_examples
 
 
 def test_dataset_length_matches_words():
@@ -49,3 +49,23 @@ def test_collate_stacks_batch():
     assert target_ids.shape == (4, 11)
     assert loss_masks.shape == (4, 11)
     assert torch.equal(loss_masks.sum(dim=1), torch.full((4,), 5.0))
+
+
+def test_generate_retrieval_examples_targets_are_words_and_states_tight():
+    tok = ConstraintTokenizer()
+    words = load_full_word_set()[:80]
+    pm = PatternMatrix.from_words(words)
+    examples = generate_retrieval_examples(tok, pm, words[:30], games_per_word=2, seed=0, max_candidates=3)
+
+    assert len(examples) > 0
+    valid = set(words)
+    empty_len = len(tok.empty_prompt())
+    saw_constrained = False
+    for prompt, target in examples:
+        assert prompt[0] == tok.bos_id
+        assert len(target) == 5
+        assert tok.decode_letters(target) in valid  # target is the answer word
+        if len(prompt) > empty_len:
+            saw_constrained = True
+    # Tight states carry real constraints (facts beyond the empty [bos] ????? [sep]).
+    assert saw_constrained

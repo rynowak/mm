@@ -12,13 +12,14 @@ from __future__ import annotations
 import random as rng
 from typing import TYPE_CHECKING
 
+import numpy as np
 import torch
 from mm_wordle import WordleEnv
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
 
 if TYPE_CHECKING:
-    from mm_wordle import ConstraintTokenizer, GameState
+    from mm_wordle import ConstraintTokenizer, GameState, PatternMatrix
 
 
 class WordOnlyDataset(Dataset):
@@ -107,3 +108,38 @@ def oversample_late_turns(
         result.extend([ex] * ex[2])
     rng.shuffle(result)
     return result
+
+
+def generate_retrieval_examples(
+    tokenizer: ConstraintTokenizer,
+    pattern_matrix: PatternMatrix,
+    words: list[str],
+    games_per_word: int,
+    seed: int,
+    max_candidates: int = 3,
+) -> list[tuple[list[int], list[int]]]:
+    """(tight constraint-state -> answer) examples over the full lexicon (§12).
+
+    For each word ``W``, plays decent rollouts (random *consistent* guesses) with
+    ``W`` as the answer and keeps states whose consistent-candidate set has
+    ``<= max_candidates`` words — i.e. states that (nearly) determine ``W``. Trains
+    the model to commit to the answer once constraints pin it down, the skill the
+    diagnostic showed missing (§11.3). Pre-training is allowed all words, so this
+    runs over the full set including hold-out.
+    """
+    env = WordleEnv()
+    grng = rng.Random(seed)
+    full = np.arange(len(pattern_matrix.targets))
+    out: list[tuple[list[int], list[int]]] = []
+    for word in words:
+        w_target = [tokenizer.encode_token(c) for c in word]
+        for _ in range(games_per_word):
+            state = env.reset(target_word=word)
+            cand = full
+            while not state.solved and not state.failed:
+                if len(cand) <= max_candidates:
+                    out.append((tokenizer.encode_game_state(state), w_target))
+                guess = pattern_matrix.targets[int(cand[grng.randrange(len(cand))])]
+                state, _ = env.step(state, guess)
+                cand = pattern_matrix.consistent_idx(guess, pattern_matrix.pattern_id(guess, word), cand)
+    return out

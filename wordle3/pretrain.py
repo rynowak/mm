@@ -31,7 +31,7 @@ from mm_wordle import ConstraintTokenizer, PatternMatrix, load_full_word_set
 from torch.utils.data import DataLoader
 
 from wordle3.config import PretrainConfig
-from wordle3.data import WordOnlyDataset, collate_padded
+from wordle3.data import ConstraintDataset, WordOnlyDataset, collate_padded, generate_retrieval_examples
 from wordle3.splits import Split, load_split
 from wordle3.steplog import MetricReporter
 from wordle3.trainutil import autocast, build_model, infinite
@@ -91,7 +91,23 @@ def train(
     optimizer = create_optimizer(model, lr=tcfg.learning_rate, weight_decay=tcfg.weight_decay)
     scheduler = create_scheduler(optimizer, warmup_steps=tcfg.warmup_steps, total_steps=tcfg.max_steps)
 
-    dataset = WordOnlyDataset(words, tokenizer)
+    if tcfg.retrieval_pretrain:
+        # Marginal (empty prompt -> word) for lexicon coverage + constraint-conditioned
+        # (tight state -> answer) for retrieval/commit, over the full lexicon (§12).
+        pairs: list[tuple[list[int], list[int]]] = [
+            (tokenizer.empty_prompt(), [tokenizer.encode_token(c) for c in w]) for w in words
+        ]
+        print("Generating retrieval (constraint -> answer) examples...")
+        retrieval = generate_retrieval_examples(
+            tokenizer, pattern_matrix, words, tcfg.games_per_word, tcfg.seed, tcfg.max_candidates
+        )
+        pairs += retrieval
+        print(f"  pretrain examples: {len(words)} marginal + {len(retrieval)} retrieval = {len(pairs)}")
+        dataset: WordOnlyDataset | ConstraintDataset = ConstraintDataset(
+            [p for p, _ in pairs], [t for _, t in pairs], tokenizer.pad_id
+        )
+    else:
+        dataset = WordOnlyDataset(words, tokenizer)
     loader = DataLoader(
         dataset,
         batch_size=tcfg.batch_size,

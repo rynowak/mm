@@ -39,6 +39,11 @@ class PretrainTrainingConfig(BaseModel):
     win_rate_interval: int = 50
     step_eval_games: int = 16  # mini-eval games per split (train + hold-out); 0 disables win rate
     eval_games: int = 256  # larger eval at eval_interval
+    # Constraint-conditioned retrieval objective (§12): teach (tight state -> answer)
+    # over the full lexicon, alongside the marginal (empty prompt -> word) examples.
+    retrieval_pretrain: bool = True
+    games_per_word: int = 2  # decent rollouts per word to harvest tight states
+    max_candidates: int = 3  # only keep states narrowed to <= this many candidates (unambiguous)
 
 
 class PretrainConfig(BaseModel):
