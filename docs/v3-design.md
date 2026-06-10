@@ -161,8 +161,9 @@ The data models live in `libs/mm-viz/src/mm_viz/data.py` (`GameReplay`,
 - **R4 — Hold-out set.** A reproducible hold-out subset of answers. **All** words
   (including hold-out) are seen during pre-training; hold-out words are **never the
   answer** in SFT or RL. Enforced and tested across phases.
-- **R5 — Generalization evaluation.** Report win rate / avg guesses separately on
-  in-distribution answers and hold-out answers; the *generalization gap* is a
+- **R5 — Generalization evaluation.** Report the eval trio (valid-word rate /
+  info gain / win rate) — plus avg guesses **over wins only** — separately on
+  in-distribution and hold-out answers; the win-rate *generalization gap* is a
   first-class metric.
 - **R6 — Speed.** Concrete, measured optimizations to RL rollout, reward
   computation, and the training loop. Larger model supported.
@@ -416,8 +417,8 @@ unchanged:
 `eval_interval` and written to `eval-{N}/snapshot.json`):
 - *Phase 3a:* expected info gain for turns 1–2 and the achieved **opener
   percentile** vs the best opener over U; valid-word rate (must not regress).
-- *Phase 3b / overall:* **win rate** and **avg guesses** on a `train_answers`
-  sample *and* on the `holdout` sample; the **generalization gap** =
+- *Phase 3b / overall:* **win rate** and **avg guesses (over wins only)** on a
+  `train_answers` sample *and* on the `holdout` sample; the **generalization gap** =
   `win_rate(train) − win_rate(holdout)` is the headline metric (R5); info gain by
   turn; invalid-word rate (should stay ≈ 0); KL-to-reference (policy-drift
   tripwire). Also track hold-out NLL as the forgetting tripwire (§8 R-1).
@@ -428,12 +429,14 @@ unchanged:
   exactly as `wordle2/finetune.py:344-355` does (same keys, `feedback` as
   `"green"|"yellow"|"gray"` strings, `guesses`/`feedback` equal length).
 - **New (fixes the empty eval chart):** at every eval, write
-  `runs/.../eval-{step}/snapshot.json` as a **plain dict** = `{step, win_rate,
-  avg_guesses, holdout_win_rate, holdout_avg_guesses}` (not `EvalSnapshot.save()` —
-  that dataclass requires `checkpoint_path`/`replays` we don't need here,
-  `data.py:72-91`). The dashboard reads only the first three keys via `.get()`
-  (`app.py:37-42`) and ignores extras, so this is backward-compatible and populates
-  the existing eval chart immediately.
+  `runs/.../eval-{step}/snapshot.json` as a **plain dict** carrying the eval trio +
+  avg guesses for train and hold-out — `{step, win_rate, valid_word_rate, info_gain,
+  avg_guesses, holdout_win_rate, holdout_valid_word_rate, holdout_info_gain,
+  holdout_avg_guesses, opener_*}` (not `EvalSnapshot.save()` — that dataclass
+  requires `checkpoint_path`/`replays` we don't need here, `data.py:72-91`). The
+  dashboard reads `win_rate`/`avg_guesses` via `.get()` (`app.py:37-42`) and ignores
+  extras, so this is backward-compatible. **`avg_guesses` is over wins only** —
+  losses are excluded, not counted as 6 (which would just re-encode win rate).
 - **Per-step trio (see §5.9):** every phase writes `valid_word_rate`, `info_gain`,
   and `win_rate` into both `live/latest.json` (top bar) and each `live/history.jsonl`
   line, in addition to `loss` (and `kl_div`/`clip_fraction` in RL). Extra keys are
@@ -543,7 +546,7 @@ D–G.
 | Opener percentile vs best-over-U | — | — | ✅ | — | RL 3a |
 | **Win rate** (train sample) | — | ✅ greedy | — | ✅ | RL 3b |
 | **Win rate (hold-out sample)** | — | ✅ greedy | — | ✅ | R5 generalization |
-| Avg guesses (train / hold-out) | — | ✅ | — | ✅ | RL 3b |
+| Avg guesses (train / hold-out), **over wins only** | — | ✅ | — | ✅ | RL 3b |
 | **Generalization gap** = WR(train) − WR(hold-out) | — | reported | — | ✅ **headline** | R5 |
 | KL-to-reference | — | — | ✅ | ✅ | RL drift tripwire |
 | Invalid-word rate | — | — | ✅ ≈0 | ✅ ≈0 | RL |
