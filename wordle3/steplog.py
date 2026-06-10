@@ -23,6 +23,30 @@ if TYPE_CHECKING:
     from wordle3.config import PretrainTrainingConfig, RLTrainingConfig, SFTTrainingConfig
     from wordle3.splits import Split
 
+# Eval targets are drawn with a FIXED seed DECOUPLED from the training seed.
+# Sharing the training seed correlated the train-answer eval sample with the
+# training-target stream, so the "train" eval landed on memorized answers and
+# inflated train win rate ~2x. The hold-out set is the real generalization eval
+# set (its words are never training answers, by construction); the train sample is
+# only a secondary in-distribution monitor. Must differ from the training seed.
+EVAL_SEED = 59297
+
+
+def sample_eval_targets(
+    split: Split, step_games: int, eval_games: int
+) -> tuple[list[str], list[str], list[str], list[str]]:
+    """Fixed, training-decoupled eval target sets: (step_train, step_holdout, big_train, big_holdout).
+
+    Hold-out sets are the explicit generalization eval (never trained); train sets
+    are an in-distribution monitor. Deterministic across runs for comparability.
+    """
+    rng = random.Random(EVAL_SEED)
+    step_train = rng.sample(split.train_answers, min(step_games, len(split.train_answers))) if step_games else []
+    step_holdout = rng.sample(split.holdout, min(step_games, len(split.holdout))) if step_games else []
+    big_train = rng.sample(split.train_answers, min(eval_games, len(split.train_answers)))
+    big_holdout = rng.sample(split.holdout, min(eval_games, len(split.holdout)))
+    return step_train, step_holdout, big_train, big_holdout
+
 
 class MetricReporter:
     """Logs the per-step trio and writes eval snapshots for a training run."""
@@ -45,12 +69,10 @@ class MetricReporter:
         self.pm = pattern_matrix
         self.device = device
         self.tcfg = tcfg
-        erng = random.Random(tcfg.seed)
-        k = tcfg.step_eval_games
-        self.step_train = erng.sample(split.train_answers, min(k, len(split.train_answers))) if k else []
-        self.step_holdout = erng.sample(split.holdout, min(k, len(split.holdout))) if k else []
-        self.big_train = erng.sample(split.train_answers, min(tcfg.eval_games, len(split.train_answers)))
-        self.big_holdout = erng.sample(split.holdout, min(tcfg.eval_games, len(split.holdout)))
+        # Decoupled from tcfg.seed (see EVAL_SEED) — hold-out is the generalization metric.
+        self.step_train, self.step_holdout, self.big_train, self.big_holdout = sample_eval_targets(
+            split, tcfg.step_eval_games, tcfg.eval_games
+        )
         self.last_win = 0.0
         self.last_holdout_win = 0.0
         self.last_replays: list[dict] = []
@@ -89,8 +111,7 @@ class MetricReporter:
         holdout_eval = play_games(self.model, self.tok, self.pm, self.big_holdout, self.device)
         write_snapshot(self.run_dir, step, train_eval, holdout_eval, opener_eval)
         print(
-            f"  [eval {step}] opener-valid {opener_eval.valid_word_rate:.0%} | "
-            f"opener-IG {opener_eval.info_gain:.2f} bits | "
-            f"win train {train_eval.win_rate:.0%} / holdout {holdout_eval.win_rate:.0%} "
-            f"(gap {train_eval.win_rate - holdout_eval.win_rate:+.0%})"
+            f"  [eval {step}] HOLDOUT win {holdout_eval.win_rate:.0%} (generalization) | "
+            f"train win {train_eval.win_rate:.0%} (in-dist) | "
+            f"opener-valid {opener_eval.valid_word_rate:.0%} IG {opener_eval.info_gain:.2f}"
         )
