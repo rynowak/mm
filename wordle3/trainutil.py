@@ -61,10 +61,15 @@ def write_snapshot(
     (snap_dir / "snapshot.json").write_text(
         json.dumps(
             {
+                # Eval trio (train + hold-out) + avg-guesses-over-wins + opener detail.
                 "step": step,
                 "win_rate": train_res.win_rate,
-                "avg_guesses": train_res.avg_guesses,
+                "valid_word_rate": train_res.valid_word_rate,
+                "info_gain": train_res.info_gain,
+                "avg_guesses": train_res.avg_guesses,  # over wins only (0.0 if none)
                 "holdout_win_rate": holdout_res.win_rate,
+                "holdout_valid_word_rate": holdout_res.valid_word_rate,
+                "holdout_info_gain": holdout_res.info_gain,
                 "holdout_avg_guesses": holdout_res.avg_guesses,
                 "opener_valid_word_rate": opener.valid_word_rate,
                 "opener_info_gain": opener.info_gain,
