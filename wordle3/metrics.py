@@ -22,10 +22,12 @@ if TYPE_CHECKING:
 
 @dataclass
 class EvalResult:
+    """Eval trio (valid-word rate / info gain / win rate) + avg guesses + detail."""
+
     valid_word_rate: float
     info_gain: float  # mean expected info gain over guesses (candidates > 1)
     win_rate: float
-    avg_guesses: float
+    avg_guesses: float  # mean guesses over SOLVED games only (0.0 if no wins; N/A then)
     by_turn: dict[int, dict[str, float]] = field(default_factory=dict)
     replays: list[dict] = field(default_factory=list)
 
@@ -123,7 +125,7 @@ def play_games(
     n_guesses = 0
     ig_values: list[float] = []
     wins = 0
-    total_turns = 0
+    solved_turns = 0  # total guesses across solved games (for avg-guesses-over-wins)
     by_turn: dict[int, dict[str, float]] = {}
     replays: list[dict] = []
 
@@ -168,8 +170,9 @@ def play_games(
                 kept = set(filter_candidates([universe[i] for i in candidate_idx], guess, fb))
                 candidate_idx = np.array([i for i in candidate_idx if universe[i] in kept], dtype=np.int64)
 
-        wins += int(state.solved)
-        total_turns += state.turn
+        if state.solved:
+            wins += 1
+            solved_turns += state.turn
         if len(replays) < max_replays:
             replays.append(
                 {
@@ -197,7 +200,7 @@ def play_games(
         valid_word_rate=n_valid / max(n_guesses, 1),
         info_gain=float(sum(ig_values) / len(ig_values)) if ig_values else 0.0,
         win_rate=wins / n,
-        avg_guesses=total_turns / n,
+        avg_guesses=solved_turns / wins if wins else 0.0,  # over wins only
         by_turn=by_turn_out,
         replays=replays,
     )

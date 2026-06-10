@@ -69,11 +69,11 @@ def test_pretrain_runs_and_writes_ui_files(tmp_path):
         for row in g["feedback"]:
             assert all(c in {"green", "yellow", "gray"} for c in row)
 
-    # Eval snapshot with hold-out fields.
+    # Eval snapshot carries the trio + avg-guesses for train + hold-out.
     snaps = list(tmp_path.glob("eval-*/snapshot.json"))
     assert snaps
     snap = json.loads(snaps[0].read_text())
-    for key in ("step", "win_rate", "avg_guesses", "holdout_win_rate", "holdout_avg_guesses"):
+    for key in ("step", "win_rate", "valid_word_rate", "info_gain", "avg_guesses", "holdout_win_rate"):
         assert key in snap
 
     # Checkpoint round-trips and carries the V3 vocab.
@@ -99,7 +99,12 @@ def test_play_games_smoke():
     from wordle3.pretrain import build_model
 
     model = build_model(ModelConfig(n_layers=2, n_heads=2, embed_dim=32), ConstraintTokenizer().vocab_size)
-    res = play_games(model, ConstraintTokenizer(), pm, split.holdout, torch.device("cpu"))
+    res = play_games(model, ConstraintTokenizer(), pm, split.holdout, torch.device("cpu"), max_replays=999)
     assert 0.0 <= res.win_rate <= 1.0
     assert 0.0 <= res.valid_word_rate <= 1.0
-    assert res.avg_guesses >= 0.0
+    assert res.info_gain >= 0.0
+    # avg_guesses must be over WINS only — exactly the mean turns of solved games,
+    # losses excluded (not counted as 6). max_replays=999 records every game.
+    solved_turns = [r["turns"] for r in res.replays if r["solved"]]
+    expected = sum(solved_turns) / len(solved_turns) if solved_turns else 0.0
+    assert abs(res.avg_guesses - expected) < 1e-9
