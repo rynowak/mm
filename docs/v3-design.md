@@ -11,6 +11,8 @@
 | 0.2 | 2026-06-08 | Incorporated design-review feedback |
 | 0.3 | 2026-06-08 | Added explicit RL eval block + per-phase evaluation matrix (§5.4, §5.8); hold-out = 10% confirmed |
 | 0.4 | 2026-06-08 | Per-step trio (valid-word rate · info gain · win rate) for ALL phases via 16-game mini-eval, with cost analysis (§5.9); dashboard step-charts in-scope (§5.5) |
+| 0.5 | 2026-06-09 | Eval fixes: avg_guesses over wins only; eval-target seed decoupled from training (hold-out is the generalization metric) |
+| 0.6 | 2026-06-10 | Post-implementation findings (§11) + V3.1 constraint-conditioned retrieval pre-training objective (§12) |
 
 ## Table of Contents
 
@@ -24,6 +26,8 @@
 8. [Risk Assessment](#8-risk-assessment)
 9. [Decision Records (ADRs)](#9-decision-records-adrs)
 10. [Open Questions](#10-open-questions)
+11. [Post-Implementation Findings (V3.0 results)](#11-post-implementation-findings-v30-results)
+12. [V3.1: Constraint-Conditioned (Retrieval) Pre-training](#12-v31-constraint-conditioned-retrieval-pre-training)
 
 ---
 
@@ -814,6 +818,118 @@ eval baseline); `play_game_good` stays for V1/V2.
   "never even guessed" claim is worth the distorted golden play; defaulting to off.
 
 ---
+
+## 11. Post-Implementation Findings (V3.0 results)
+
+Running the full V3.0 pipeline and a read-only diagnostic (`wordle3/diagnose.py`)
+overturned the initial headline numbers, surfaced two eval bugs, and isolated the
+real failure mode.
+
+### 11.1 Two eval bugs (both fixed)
+
+- **`avg_guesses` counted losses as 6** (the guess cap), so it just re-encoded win
+  rate. Fixed to average over **wins only** (v0.5).
+- **Eval sampled targets with the *training* seed.** The "train" eval sample
+  correlated with the training-target stream and landed on **memorized** answers,
+  inflating train win rate ~2× (reported **93%** vs a true **~47%**). Fixed by
+  decoupling the eval seed (`steplog.EVAL_SEED`); **hold-out is the generalization
+  metric** and was unaffected (its words are never training answers).
+
+### 11.2 The honest result
+
+| solve rate (final RL checkpoint) | value |
+|----------------------------------|-------|
+| words trained on as answers | ~92% |
+| untrained train-split words | ~38% |
+| hold-out words | ~34% |
+
+The model **memorizes** the answers it trains on and **generalizes weakly (~36%)** —
+identically whether the unseen word is in the *train* split or the *hold-out*
+split. **The train/hold-out split is nearly irrelevant; the real axis is
+seen-as-answer vs not.** Only ~26% of train words (3,485/13,370) were ever used as
+a golden answer, and RL (phase 2, 1k steps) was effectively a no-op (KL-pinned).
+
+### 11.3 The failure mode
+
+The model **narrows to the answer but won't commit**: losses have a **median of 1**
+remaining candidate, yet it guesses the lone candidate only **9–18%** of the time.
+It reliably emits only *memorized* answers; for unseen words it can't invert
+"constraints → the one consistent word", so it keeps probing and times out.
+
+**Conclusion:** the bottleneck is **constraint→word retrieval / endgame
+commitment**, not capacity (pre-training already fits the lexicon; narrowing is
+good). Capacity (MoE/38M) and inference crutches (constrained decoding) do not
+address it — and a crutch defeats the point (the exercise is to *train* the model).
+
+## 12. V3.1: Constraint-Conditioned (Retrieval) Pre-training
+
+**Root cause.** No phase ever trained the missing skill. Pre-training learned only
+the marginal word distribution (`empty prompt → word`); SFT/RL only needed
+retrieval on the ~26% of train words used as answers, so **memorization sufficed**
+and the general skill never formed.
+
+**Fix.** Add a retrieval/commit objective to **pre-training** — the phase allowed to
+see *all* words — over the full 14,855-word lexicon:
+
+- For each word `W`, simulate decent play with `W` as the answer and collect
+  constraint states that narrow to **≤ `max_candidates` (≈1–3)** consistent words;
+  train `(constraint-state → W)`.
+- Restricting to **tight states** keeps the target unambiguous and **conflict-free
+  with SFT** (which also commits at ≤2 candidates). Loose mid-game states stay
+  SFT/RL's job (probe for information).
+- Keep the marginal `empty prompt → word` examples for lexicon coverage; combined
+  pre-training teaches both *the lexicon* and *constraint→word retrieval*.
+
+**Why it's in-bounds (pure training, no shortcut).** It changes *what the model
+learns*, not the task or the inference path — no constrained decoding, no candidate
+set handed to the model, no memorize-everything. It uses pre-training as designed
+("show the model all words").
+
+**Hold-out semantics (signed off).** Training retrieval over all words means the
+model *can* produce hold-out words from constraints, so the hold-out now tests
+whether the **learned game strategy** (narrow + commit, trained on train answers)
+generalizes to answers it never *played* — the meaningful generalization for a
+game-player. Lexical generalization (producing a never-seen string) is impossible
+by construction, which is exactly why pre-training sees all words.
+
+**ADR-9 — Teach constraint→word retrieval in pre-training, on tight states only.**
+*Context:* the model memorizes answers and can't commit to unseen ones (§11).
+*Decision:* add `(tight constraint-state → answer)` examples over the full lexicon
+to pre-training, restricted to ≤ few candidates, alongside the marginal examples.
+*Rationale:* directly trains the missing skill in the phase allowed all words,
+without crutches or task changes, and conflict-free with SFT. *Consequences:*
+hold-out tests strategy generalization (not lexical); larger pre-train dataset; new
+config knobs (`retrieval_pretrain`, `games_per_word`, `max_candidates`).
+
+**Eval.** Headline stays **hold-out win rate** (honest eval, §5.9). Add a
+**retrieval-accuracy probe**: for hold-out words, construct a 1-candidate state and
+check whether the model greedily produces the word — the direct measure of the
+trained skill.
+
+**Build plan.** Extend `wordle3/data.py` (retrieval example generation),
+`PretrainTrainingConfig` (knobs), and `wordle3/pretrain.py` (combined dataset);
+re-run pre-train → SFT → RL; read hold-out win rate + retrieval accuracy.
+
+### 12.1 Results (V3.1, 10M model)
+
+The objective worked — it turned the memorizer into a generalizing solver.
+
+| measure | V3.0 (no retrieval) | V3.1 (retrieval pre-train) |
+|---------|---------------------|----------------------------|
+| commit@1, hold-out (produce the answer when only it remains) | 5% | **27%** |
+| commit@1, train | 11% | 38% |
+| pre-train-alone hold-out win | n/a (≈0, can't play) | **~38% (≈ train — gap eliminated)** |
+| **hold-out win after SFT** | **~34%** | **52%** |
+| train win after SFT (honest) | ~47% | ~61% |
+| train/hold-out gap | memorization regime (92% on memorized) | **~9%** |
+
+- The commit skill rose **~5×** on hold-out (5%→27%), the mechanism that was missing.
+- **Hold-out win rate 34% → 52% (+18 pts).** Pre-train alone already eliminates the
+  gap (~38% hold-out ≈ train); SFT adds strategy (opener IG 4.5→6.0) that transfers
+  to unseen answers instead of just memorized ones.
+- Headroom remains (commit@1 only 27%) → next lever is **capacity** (38M/MoE), now
+  justified: the objective is right, so capacity is the bottleneck rather than a guess.
+- (RL phase-2 on top: in progress at time of writing.)
 
 ## Review Incorporation Summary
 
