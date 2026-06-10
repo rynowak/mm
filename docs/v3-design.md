@@ -910,6 +910,27 @@ trained skill.
 `PretrainTrainingConfig` (knobs), and `wordle3/pretrain.py` (combined dataset);
 re-run pre-train → SFT → RL; read hold-out win rate + retrieval accuracy.
 
+### 12.1 Results (V3.1, 10M model)
+
+The objective worked — it turned the memorizer into a generalizing solver.
+
+| measure | V3.0 (no retrieval) | V3.1 (retrieval pre-train) |
+|---------|---------------------|----------------------------|
+| commit@1, hold-out (produce the answer when only it remains) | 5% | **27%** |
+| commit@1, train | 11% | 38% |
+| pre-train-alone hold-out win | n/a (≈0, can't play) | **~38% (≈ train — gap eliminated)** |
+| **hold-out win after SFT** | **~34%** | **52%** |
+| train win after SFT (honest) | ~47% | ~61% |
+| train/hold-out gap | memorization regime (92% on memorized) | **~9%** |
+
+- The commit skill rose **~5×** on hold-out (5%→27%), the mechanism that was missing.
+- **Hold-out win rate 34% → 52% (+18 pts).** Pre-train alone already eliminates the
+  gap (~38% hold-out ≈ train); SFT adds strategy (opener IG 4.5→6.0) that transfers
+  to unseen answers instead of just memorized ones.
+- Headroom remains (commit@1 only 27%) → next lever is **capacity** (38M/MoE), now
+  justified: the objective is right, so capacity is the bottleneck rather than a guess.
+- (RL phase-2 on top: in progress at time of writing.)
+
 ## Review Incorporation Summary
 
 Design review verdict: **CONDITIONAL APPROVE**. Resolved in v0.2:
