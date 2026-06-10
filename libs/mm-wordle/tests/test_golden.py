@@ -59,3 +59,13 @@ def test_golden_guesses_are_valid_and_consistent():
     valid = set(words)
     for gf in state.guesses:
         assert gf.guess in valid
+
+
+def test_full_search_golden_solves_nearly_all():
+    words = load_full_word_set()[:400]
+    pm = PatternMatrix.from_words(words)
+    solver = GoldenSolver(pm)  # default = full-lexicon search
+    env = WordleEnv()
+    targets = words[:150]
+    solved = sum(play_golden_game(solver, env, t).solved for t in targets)
+    assert solved / len(targets) >= 0.98

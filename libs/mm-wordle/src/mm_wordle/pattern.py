@@ -196,3 +196,35 @@ class PatternMatrix:
             if ig > best:
                 best = ig
         return best
+
+    def best_guess_idx(self, candidate_idx: np.ndarray, search_idx: np.ndarray | None = None, chunk: int = 4096) -> int:
+        """Row index of the max-expected-info-gain guess over the candidate set.
+
+        Vectorized over guess rows via an offset-bincount, chunked to bound memory,
+        so full-lexicon search per turn is affordable (vs the per-guess Python loop
+        in ``best_expected_info_gain``). Ties break toward an actual candidate so a
+        solver can commit. ``search_idx`` restricts the guess rows (default: all).
+        """
+        rows = np.arange(len(self.guesses)) if search_idx is None else np.asarray(search_idx)
+        n = candidate_idx.shape[0]
+        if n <= 1:
+            return int(candidate_idx[0])  # G == U: the candidate's own row solves it
+
+        best_ent = -1.0
+        best_gi = int(rows[0])
+        for start in range(0, len(rows), chunk):
+            block = rows[start : start + chunk]
+            sub = self.matrix[block][:, candidate_idx].astype(np.int64)  # (b, n)
+            b = sub.shape[0]
+            flat = (np.arange(b)[:, None] * N_PATTERNS + sub).ravel()
+            counts = np.bincount(flat, minlength=b * N_PATTERNS).reshape(b, N_PATTERNS).astype(np.float64)
+            nz = counts > 0
+            logterm = np.zeros_like(counts)
+            logterm[nz] = (counts[nz] / n) * np.log2(counts[nz] / n)
+            ent = -logterm.sum(axis=1)
+            ent[np.isin(block, candidate_idx)] += 1e-9  # commit tiebreak
+            j = int(ent.argmax())
+            if ent[j] > best_ent:
+                best_ent = float(ent[j])
+                best_gi = int(block[j])
+        return best_gi

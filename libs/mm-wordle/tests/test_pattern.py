@@ -159,3 +159,27 @@ def test_best_info_gain_faster_than_naive():
 
     assert fast == pytest.approx(slow, abs=1e-9)
     assert fast_t < slow_t / 2, f"matrix {fast_t:.4f}s not >2x faster than naive {slow_t:.4f}s"
+
+
+def test_best_guess_idx_matches_bruteforce():
+    """The vectorized best-guess picks a guess achieving the true max info gain."""
+    words = load_full_word_set()[:150]
+    m = PatternMatrix.from_words(words)
+    rng = np.random.default_rng(3)
+    for _ in range(8):
+        k = int(rng.integers(3, len(words)))
+        cand = np.sort(rng.choice(len(words), size=k, replace=False))
+        gi = m.best_guess_idx(cand)
+        chosen_ig = m.expected_info_gain(m.guesses[gi], cand)
+        best_ig = max(m.expected_info_gain(w, cand) for w in words)
+        assert chosen_ig == pytest.approx(best_ig, abs=1e-9)
+
+
+def test_best_guess_idx_chunking_is_consistent():
+    words = load_full_word_set()[:120]
+    m = PatternMatrix.from_words(words)
+    cand = np.arange(2, 90)
+    # chunked vs single-block must agree on the achieved info gain
+    a = m.expected_info_gain(m.guesses[m.best_guess_idx(cand, chunk=16)], cand)
+    b = m.expected_info_gain(m.guesses[m.best_guess_idx(cand, chunk=10_000)], cand)
+    assert a == pytest.approx(b, abs=1e-9)
