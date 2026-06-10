@@ -584,10 +584,22 @@ per-step series is comparable step-to-step.
 
 **Noise & interpretation.** Per-step win rate is intentionally a *small-sample,
 smoothed-trend* signal (16–32 games, or one RL batch of `batch_size`); it is **not**
-the headline number. The precise win rate is the `eval_interval` full eval over a
-large `train_answers` sample and the full `holdout` set, written to
-`eval-{N}/snapshot.json` (§5.5) with the generalization gap. The per-step series
-gives a live training pulse; the interval eval gives the number we report.
+the headline number. The precise win rate is the `eval_interval` full eval over the
+hold-out set and a train sample, written to `eval-{N}/snapshot.json` (§5.5). The
+per-step series gives a live training pulse; the interval eval gives the number we
+report.
+
+**Explicit eval hold-out + decoupled seed (eval hygiene).** The **hold-out set is
+the generalization eval set** — its words are *never* used as a training answer
+(R4), so hold-out win rate is a clean, seed-robust measure of skill on unseen
+words. Eval target sets are sampled with a **fixed seed decoupled from the training
+seed** (`steplog.EVAL_SEED`). This matters: an earlier version sampled the train
+eval with the *training* seed, which correlated the sample with the training-target
+stream so it landed on **memorized** answers and inflated "train win rate" ~2×
+(observed 93% vs a true ~47%). The train number is only a secondary in-distribution
+monitor and still includes whatever fraction of the sample was used as a training
+answer (the model memorizes those, ~92%, vs ~36% on never-trained words) — so
+**generalization is read from hold-out, not train**.
 
 **Plumbing.** A shared `mm_training` helper (`StepMetrics` →
 `{valid_word_rate, info_gain, win_rate}`) is logged to TensorBoard and written into
