@@ -1,0 +1,4 @@
+# Downloaded + preprocessed corpus is regenerable via `python -m bufo.prepare`.
+raw/
+images/
+metadata.jsonl

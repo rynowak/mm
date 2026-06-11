@@ -1,0 +1,35 @@
+# Bufo LoRA fine-tune on Stable Diffusion 1.5 (512px).
+# Tuned for a single Apple-silicon GPU (MPS, fp32). On CUDA, amp enables bf16.
+data:
+  repo: knobiknows/all-the-bufo
+  subdir: all-the-bufo
+  data_dir: bufo/data
+  resolution: 512
+  exclude_substrings: ["bigbufo_"]
+  random_flip: true
+
+lora:
+  rank: 16
+  alpha: 16
+  dropout: 0.0
+  target_modules: ["to_q", "to_k", "to_v", "to_out.0"]
+
+training:
+  seed: 42
+  base_model: stable-diffusion-v1-5/stable-diffusion-v1-5
+  batch_size: 1
+  grad_accum: 4          # effective batch 4
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-2
+  warmup_steps: 50
+  max_steps: 1500
+  grad_clip: 1.0
+  amp: true              # bf16 on CUDA; fp32 eager on MPS/CPU
+  snapshot_interval: 250
+  checkpoint_interval: 500
+  num_workers: 0
+  snapshot_prompts:
+    - "a bufo of happy, frog emoji sticker, white background"
+    - "a bufo of coffee, frog emoji sticker, white background"
+    - "a bufo of cowboy, frog emoji sticker, white background"
+    - "a bufo of crying, frog emoji sticker, white background"
