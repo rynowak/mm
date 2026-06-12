@@ -9,7 +9,6 @@ Metric: val_avg_lines (average lines cleared per game over evaluation games).
 """
 
 import json
-import math
 import random
 import time
 from collections.abc import Callable
@@ -43,12 +42,7 @@ def score_board(state: mm_tetris.TetrisState, lines_just_cleared: int, weights: 
     agg_height = sum(heights)
     holes = state.count_holes()
     bumpiness = sum(abs(heights[i] - heights[i + 1]) for i in range(len(heights) - 1))
-    return (
-        weights[0] * agg_height
-        + weights[1] * holes
-        + weights[2] * bumpiness
-        + weights[3] * lines_just_cleared
-    )
+    return weights[0] * agg_height + weights[1] * holes + weights[2] * bumpiness + weights[3] * lines_just_cleared
 
 
 def select_action_heuristic(state: mm_tetris.TetrisState, weights: list[float]) -> int:
