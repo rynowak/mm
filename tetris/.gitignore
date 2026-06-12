@@ -1,0 +1,6 @@
+# Live training feed (board + metrics) consumed by the dashboard
+.live/
+
+# Autoresearch runtime artifacts — git commits are the canonical experiment history
+autoresearch-status.json
+autoresearch-log.jsonl

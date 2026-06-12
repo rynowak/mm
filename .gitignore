@@ -10,3 +10,4 @@ runs/
 *.npy
 .ruff_cache/
 .claude/worktrees/
+.live/

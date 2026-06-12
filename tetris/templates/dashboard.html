@@ -1,0 +1,994 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tetris RL Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+    --bg: #0a0a1a;
+    --surface: #12122a;
+    --surface-alt: #1a1a35;
+    --border: #2a2a4a;
+    --text: #e0e0f0;
+    --text-dim: #7777aa;
+    --accent: #00d4ff;
+    --accent-dim: #004466;
+    --cell-filled: #00b4d8;
+    --cell-empty: #0e0e25;
+    --success: #44ff88;
+    --danger: #ff4466;
+    --warning: #ffaa44;
+}
+
+body {
+    font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Consolas', monospace;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+header {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding: 12px 20px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 1px;
+}
+
+.stats {
+    display: flex;
+    gap: 20px;
+    flex: 1;
+}
+
+.stat { display: flex; flex-direction: column; gap: 2px; }
+.stat-label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
+.stat-value { font-size: 14px; font-weight: 600; }
+
+.status {
+    font-size: 11px;
+    padding: 4px 12px;
+    border-radius: 12px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 600;
+}
+.status.connecting { background: var(--accent-dim); color: var(--accent); }
+.status.training { background: #1a3a1a; color: var(--success); }
+.status.evaluating { background: #3a3a1a; color: var(--warning); }
+.status.complete { background: #1a1a3a; color: var(--accent); }
+.status.disconnected { background: #3a1a1a; color: var(--danger); }
+
+main {
+    display: grid;
+    grid-template-columns: auto 1fr 260px;
+    grid-template-rows: 1fr;
+    gap: 16px;
+    padding: 16px;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* Board panel */
+#board-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+}
+
+#tetris-board { border: 2px solid var(--border); border-radius: 4px; }
+
+#board-info {
+    display: flex;
+    gap: 20px;
+    font-size: 13px;
+}
+#board-info span { color: var(--accent); font-weight: 600; }
+
+#board-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 12px;
+}
+
+#board-controls button, #board-controls select {
+    background: var(--surface-alt);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 12px;
+}
+
+#board-controls button:hover { background: var(--border); }
+#board-controls button.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+
+.mode-btn { min-width: 60px; text-align: center; }
+
+#step-controls button {
+    font-size: 14px;
+    padding: 4px 8px;
+}
+#step-controls button:disabled { opacity: 0.3; cursor: not-allowed; }
+
+.live-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--danger);
+    animation: pulse 1.5s ease-in-out infinite;
+    margin-right: 4px;
+}
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+.live-indicator { display: flex; align-items: center; font-size: 11px; color: var(--danger); font-weight: 600; }
+.live-indicator.hidden { display: none; }
+
+/* Chart panel */
+#chart-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.chart-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.chart-card h3 {
+    font-size: 12px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 12px;
+}
+
+.chart-wrap { flex: 1; position: relative; min-height: 0; }
+
+/* Games panel */
+#games-panel {
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    min-height: 0;
+}
+
+#games-panel h3 {
+    font-size: 12px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+}
+
+#game-list {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+}
+
+.game-entry {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    cursor: pointer;
+    border-bottom: 1px solid #1a1a30;
+    font-size: 12px;
+    transition: background 0.15s;
+}
+.game-entry:hover { background: var(--surface-alt); }
+.game-entry.selected { background: var(--accent-dim); border-left: 3px solid var(--accent); }
+
+.game-ep { color: var(--text-dim); min-width: 40px; }
+.game-lines { color: var(--accent); font-weight: 600; min-width: 50px; }
+.game-score { color: var(--text-dim); }
+.game-lines.good { color: var(--success); }
+
+#game-list::-webkit-scrollbar { width: 6px; }
+#game-list::-webkit-scrollbar-track { background: var(--surface); }
+#game-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* Right panel tabs */
+.panel-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+}
+.panel-tab {
+    flex: 1;
+    padding: 10px 14px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-dim);
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 600;
+    transition: color 0.15s, border-color 0.15s;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+}
+.panel-tab:hover { color: var(--text); }
+.panel-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.tab-content { display: none; flex: 1; overflow-y: auto; min-height: 0; }
+.tab-content.active { display: flex; flex-direction: column; }
+
+/* Changelog entries */
+#changelog-list { flex: 1; overflow-y: auto; min-height: 0; }
+
+.changelog-entry {
+    padding: 10px 14px;
+    border-bottom: 1px solid #1a1a30;
+    font-size: 12px;
+}
+.changelog-entry:hover { background: var(--surface-alt); }
+
+.changelog-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.changelog-iter { color: var(--text-dim); font-size: 11px; min-width: 24px; }
+.changelog-badge {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+.badge-kept { background: #1a3a1a; color: var(--success); }
+.badge-reverted { background: #3a1a1a; color: var(--danger); }
+.badge-baseline { background: #1a1a3a; color: var(--accent); }
+
+.changelog-metric {
+    font-weight: 600;
+    margin-left: auto;
+    font-size: 12px;
+}
+.changelog-metric.up { color: var(--success); }
+.changelog-metric.down { color: var(--danger); }
+.changelog-metric.neutral { color: var(--accent); }
+
+.changelog-change {
+    color: var(--text);
+    line-height: 1.4;
+    margin-bottom: 2px;
+}
+.changelog-rationale {
+    color: var(--text-dim);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+#changelog-list::-webkit-scrollbar { width: 6px; }
+#changelog-list::-webkit-scrollbar-track { background: var(--surface); }
+#changelog-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* Live autoresearch status */
+.ar-status {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    background: var(--surface-alt);
+}
+.ar-status.hidden { display: none; }
+
+.ar-status-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.ar-phase {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+}
+.phase-reading { background: #1a1a3a; color: var(--accent); }
+.phase-proposing { background: #2a1a3a; color: #cc88ff; }
+.phase-training { background: #1a3a1a; color: var(--success); animation: pulse 1.5s ease-in-out infinite; }
+.phase-evaluating { background: #3a3a1a; color: var(--warning); }
+
+.ar-status-change { color: var(--text); line-height: 1.4; margin-top: 4px; }
+.ar-status-rationale { color: var(--text-dim); font-size: 11px; line-height: 1.4; margin-top: 2px; }
+.ar-status-metric { color: var(--text-dim); font-size: 11px; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<header>
+    <h1>TETRIS RL</h1>
+    <div class="stats">
+        <div class="stat">
+            <span class="stat-label">Episode</span>
+            <span class="stat-value" id="stat-episode">0</span>
+        </div>
+        <div class="stat">
+            <span class="stat-label">Steps</span>
+            <span class="stat-value" id="stat-steps">0</span>
+        </div>
+        <div class="stat">
+            <span class="stat-label">&epsilon;</span>
+            <span class="stat-value" id="stat-epsilon">1.00</span>
+        </div>
+        <div class="stat">
+            <span class="stat-label">Loss</span>
+            <span class="stat-value" id="stat-loss">-</span>
+        </div>
+        <div class="stat">
+            <span class="stat-label">Avg Lines (10)</span>
+            <span class="stat-value" id="stat-avg-lines">-</span>
+        </div>
+    </div>
+    <span class="status connecting" id="status">Connecting</span>
+</header>
+
+<main>
+    <!-- Board -->
+    <div id="board-panel">
+        <canvas id="tetris-board" width="280" height="560"></canvas>
+        <div id="board-info">
+            <div>Piece: <span id="info-piece">-</span></div>
+            <div>Lines: <span id="info-lines">0</span></div>
+            <div>Score: <span id="info-score">0</span></div>
+        </div>
+        <div id="board-controls">
+            <button class="mode-btn active" id="btn-live" onclick="setMode('live')">LIVE</button>
+            <button class="mode-btn" id="btn-replay" onclick="setMode('replay')">REPLAY</button>
+            <label>Speed:
+                <select id="speed-select" onchange="setSpeed(this.value)">
+                    <option value="2">2/s</option>
+                    <option value="5" selected>5/s</option>
+                    <option value="10">10/s</option>
+                    <option value="20">20/s</option>
+                    <option value="0">Max</option>
+                </select>
+            </label>
+            <div id="step-controls">
+                <button onclick="stepPrev()" title="Previous">&#9198;</button>
+                <button id="btn-play" onclick="togglePlay()" title="Play/Pause">&#9208;</button>
+                <button onclick="stepNext()" title="Next">&#9197;</button>
+            </div>
+            <div class="live-indicator" id="live-indicator"><span class="live-dot"></span>LIVE</div>
+        </div>
+    </div>
+
+    <!-- Charts -->
+    <div id="chart-panel">
+        <div class="chart-card">
+            <h3>Lines per Game</h3>
+            <div class="chart-wrap">
+                <canvas id="lines-chart"></canvas>
+            </div>
+        </div>
+        <div class="chart-card">
+            <h3>Training</h3>
+            <div class="chart-wrap">
+                <canvas id="training-chart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Right panel: Games + Changelog tabs -->
+    <div id="games-panel">
+        <div class="panel-tabs">
+            <button class="panel-tab active" onclick="switchTab('games')">Games</button>
+            <button class="panel-tab" onclick="switchTab('changelog')">Changelog</button>
+        </div>
+        <div id="tab-games" class="tab-content active">
+            <div id="game-list"></div>
+        </div>
+        <div id="tab-changelog" class="tab-content">
+            <div id="ar-status" class="ar-status hidden"></div>
+            <div id="changelog-list"></div>
+        </div>
+    </div>
+</main>
+
+<script>
+// =========================================================================
+// State
+// =========================================================================
+let ws = null;
+let mode = 'live';           // 'live' | 'replay'
+let playbackSpeed = 5;       // steps per second (0 = immediate)
+let playing = true;
+
+const eventBuffer = [];       // buffered live events
+const games = [];             // completed game records {game_id, lines, score, steps[]}
+let currentGameSteps = [];    // steps being collected for current live game
+
+let replaySteps = null;       // steps of the game being replayed
+let replayIndex = 0;
+
+let playbackTimer = null;
+let lastEpisodeData = null;
+let episodeLinesHistory = []; // {x: episode, y: lines}
+let runningAvg = [];          // running average data
+
+// =========================================================================
+// Canvas setup
+// =========================================================================
+const CELL = 28;
+const COLS = 10;
+const ROWS = 20;
+const canvas = document.getElementById('tetris-board');
+const ctx = canvas.getContext('2d');
+
+function drawBoard(grid) {
+    // Background
+    ctx.fillStyle = '#0e0e25';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (!grid) return;
+
+    for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+            const x = c * CELL;
+            const y = r * CELL;
+            if (grid[r][c]) {
+                // Filled cell with depth effect
+                ctx.fillStyle = '#00b4d8';
+                ctx.fillRect(x + 1, y + 1, CELL - 2, CELL - 2);
+                ctx.fillStyle = 'rgba(255,255,255,0.18)';
+                ctx.fillRect(x + 1, y + 1, CELL - 2, 4);
+                ctx.fillStyle = 'rgba(0,0,0,0.25)';
+                ctx.fillRect(x + 1, y + CELL - 5, CELL - 2, 4);
+            }
+        }
+    }
+
+    // Grid lines
+    ctx.strokeStyle = '#1c1c3a';
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i <= COLS; i++) {
+        ctx.beginPath();
+        ctx.moveTo(i * CELL, 0);
+        ctx.lineTo(i * CELL, canvas.height);
+        ctx.stroke();
+    }
+    for (let i = 0; i <= ROWS; i++) {
+        ctx.beginPath();
+        ctx.moveTo(0, i * CELL);
+        ctx.lineTo(canvas.width, i * CELL);
+        ctx.stroke();
+    }
+}
+
+function updateBoardInfo(piece, lines, score) {
+    document.getElementById('info-piece').textContent = piece || '-';
+    document.getElementById('info-lines').textContent = lines || 0;
+    document.getElementById('info-score').textContent = score || 0;
+}
+
+// =========================================================================
+// Charts
+// =========================================================================
+const linesChart = new Chart(document.getElementById('lines-chart'), {
+    type: 'scatter',
+    data: {
+        datasets: [{
+            label: 'Lines/Game',
+            data: [],
+            backgroundColor: 'rgba(0, 180, 216, 0.3)',
+            borderColor: 'rgba(0, 180, 216, 0.5)',
+            pointRadius: 2,
+            order: 2,
+        }, {
+            label: 'Avg (10)',
+            data: [],
+            borderColor: '#ff6b6b',
+            pointRadius: 0,
+            type: 'line',
+            borderWidth: 2,
+            tension: 0.3,
+            order: 1,
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: 'nearest', intersect: false },
+        scales: {
+            x: { title: { display: true, text: 'Episode', color: '#777' }, ticks: { color: '#777' }, grid: { color: '#1c1c3a' } },
+            y: { title: { display: true, text: 'Lines', color: '#777' }, beginAtZero: true, ticks: { color: '#777' }, grid: { color: '#1c1c3a' } },
+        },
+        plugins: { legend: { labels: { color: '#aaa', boxWidth: 12, font: { size: 11 } } } },
+    }
+});
+
+const trainingChart = new Chart(document.getElementById('training-chart'), {
+    type: 'line',
+    data: {
+        datasets: [{
+            label: 'Loss',
+            data: [],
+            borderColor: '#ff6b6b',
+            pointRadius: 0,
+            borderWidth: 1.5,
+            tension: 0.3,
+            yAxisID: 'y',
+        }, {
+            label: 'Epsilon',
+            data: [],
+            borderColor: '#44ff88',
+            pointRadius: 0,
+            borderWidth: 1.5,
+            borderDash: [4, 4],
+            tension: 0.3,
+            yAxisID: 'y1',
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: 'nearest', intersect: false },
+        scales: {
+            x: { type: 'linear', title: { display: true, text: 'Episode', color: '#777' }, ticks: { color: '#777' }, grid: { color: '#1c1c3a' } },
+            y: { title: { display: true, text: 'Loss', color: '#777' }, beginAtZero: true, ticks: { color: '#777' }, grid: { color: '#1c1c3a' }, position: 'left' },
+            y1: { title: { display: true, text: 'Epsilon', color: '#777' }, min: 0, max: 1, ticks: { color: '#777' }, grid: { drawOnChartArea: false }, position: 'right' },
+        },
+        plugins: { legend: { labels: { color: '#aaa', boxWidth: 12, font: { size: 11 } } } },
+    }
+});
+
+function addMetricPoint(m) {
+    const ep = m.episode;
+    const lines = m.lines;
+
+    episodeLinesHistory.push({ x: ep, y: lines });
+    linesChart.data.datasets[0].data.push({ x: ep, y: lines });
+
+    // Running average (last 10)
+    const recent = episodeLinesHistory.slice(-10);
+    const avg = recent.reduce((s, p) => s + p.y, 0) / recent.length;
+    runningAvg.push({ x: ep, y: avg });
+    linesChart.data.datasets[1].data = runningAvg.slice();
+
+    // Training chart
+    if (m.loss != null) {
+        trainingChart.data.datasets[0].data.push({ x: ep, y: m.loss });
+    }
+    trainingChart.data.datasets[1].data.push({ x: ep, y: m.epsilon });
+}
+
+let chartUpdatePending = false;
+function scheduleChartUpdate() {
+    if (chartUpdatePending) return;
+    chartUpdatePending = true;
+    requestAnimationFrame(() => {
+        linesChart.update();
+        trainingChart.update();
+        chartUpdatePending = false;
+    });
+}
+
+// =========================================================================
+// WebSocket
+// =========================================================================
+function connect() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${proto}//${location.host}/ws`);
+
+    ws.onopen = () => setStatus('training');
+
+    ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.type === 'init') {
+            setStatus(data.status);
+            for (const m of data.metrics) addMetricPoint(m);
+            scheduleChartUpdate();
+            return;
+        }
+
+        if (data.type === 'game_start' || data.type === 'step') {
+            if (mode === 'live') eventBuffer.push(data);
+            currentGameSteps.push(data);
+        }
+
+        if (data.type === 'episode_end') {
+            games.push({
+                game_id: data.game_id,
+                lines: data.lines,
+                score: data.score,
+                pieces: data.pieces,
+                episode: data.episode,
+                steps: currentGameSteps.slice(),
+            });
+            currentGameSteps = [];
+            if (games.length > 200) games.shift();
+
+            addMetricPoint(data);
+            scheduleChartUpdate();
+            updateStats(data);
+            addGameToList(data);
+        }
+
+        if (data.type === 'eval_start') setStatus('evaluating');
+
+        if (data.type === 'training_complete') {
+            setStatus('complete');
+            document.getElementById('stat-avg-lines').textContent = data.val_avg_lines.toFixed(2);
+        }
+    };
+
+    ws.onclose = () => {
+        setStatus('disconnected');
+        setTimeout(connect, 2000);
+    };
+}
+
+// =========================================================================
+// Playback engine
+// =========================================================================
+function startPlayback() {
+    stopPlayback();
+    if (playbackSpeed === 0) {
+        // Max speed: process all buffered events immediately on each frame
+        function maxSpeedTick() {
+            for (let i = 0; i < 20 && (eventBuffer.length > 0 || (replaySteps && replayIndex < replaySteps.length)); i++) {
+                tick();
+            }
+            if (playing) playbackTimer = requestAnimationFrame(maxSpeedTick);
+        }
+        playbackTimer = requestAnimationFrame(maxSpeedTick);
+    } else {
+        playbackTimer = setInterval(tick, 1000 / playbackSpeed);
+    }
+}
+
+function stopPlayback() {
+    if (playbackTimer != null) {
+        if (playbackSpeed === 0) cancelAnimationFrame(playbackTimer);
+        else clearInterval(playbackTimer);
+        playbackTimer = null;
+    }
+}
+
+function tick() {
+    if (mode === 'live') {
+        if (eventBuffer.length === 0) return;
+        // Skip ahead if too far behind
+        if (eventBuffer.length > 300) {
+            let skipTo = 0;
+            for (let i = eventBuffer.length - 1; i >= 0; i--) {
+                if (eventBuffer[i].type === 'game_start') { skipTo = i; break; }
+            }
+            eventBuffer.splice(0, skipTo);
+        }
+        renderEvent(eventBuffer.shift());
+    } else if (replaySteps && replayIndex < replaySteps.length) {
+        renderEvent(replaySteps[replayIndex++]);
+    }
+}
+
+function renderEvent(ev) {
+    if (!ev) return;
+    if (ev.type === 'game_start') {
+        drawBoard(null);
+        updateBoardInfo(ev.piece, 0, 0);
+    } else if (ev.type === 'step') {
+        drawBoard(ev.grid);
+        updateBoardInfo(ev.piece, ev.lines_cleared, ev.score);
+    }
+}
+
+// =========================================================================
+// Controls
+// =========================================================================
+function setMode(m) {
+    mode = m;
+    document.getElementById('btn-live').classList.toggle('active', m === 'live');
+    document.getElementById('btn-replay').classList.toggle('active', m === 'replay');
+    document.getElementById('live-indicator').classList.toggle('hidden', m !== 'live');
+
+    document.querySelectorAll('.game-entry').forEach(el => el.classList.remove('selected'));
+
+    if (m === 'live') {
+        replaySteps = null;
+        replayIndex = 0;
+        playing = true;
+        startPlayback();
+    }
+}
+
+function setSpeed(v) {
+    playbackSpeed = parseInt(v);
+    if (playing) startPlayback();
+}
+
+function togglePlay() {
+    playing = !playing;
+    document.getElementById('btn-play').innerHTML = playing ? '&#9208;' : '&#9654;';
+    if (playing) startPlayback();
+    else stopPlayback();
+}
+
+function stepPrev() {
+    if (mode !== 'replay' || !replaySteps) return;
+    replayIndex = Math.max(0, replayIndex - 2);
+    renderEvent(replaySteps[replayIndex]);
+    replayIndex++;
+}
+
+function stepNext() {
+    if (mode === 'replay' && replaySteps && replayIndex < replaySteps.length) {
+        renderEvent(replaySteps[replayIndex++]);
+    } else if (mode === 'live' && eventBuffer.length > 0) {
+        renderEvent(eventBuffer.shift());
+    }
+}
+
+function selectGame(idx) {
+    const game = games[idx];
+    if (!game || !game.steps.length) return;
+
+    setMode('replay');
+    replaySteps = game.steps;
+    replayIndex = 0;
+
+    document.querySelectorAll('.game-entry').forEach(el => el.classList.remove('selected'));
+    const entries = document.querySelectorAll('.game-entry');
+    if (entries[idx]) entries[idx].classList.add('selected');
+
+    playing = true;
+    document.getElementById('btn-play').innerHTML = '&#9208;';
+    startPlayback();
+}
+
+// =========================================================================
+// UI updates
+// =========================================================================
+function setStatus(s) {
+    const el = document.getElementById('status');
+    el.className = 'status ' + s;
+    const labels = { connecting: 'Connecting', training: 'Training', evaluating: 'Evaluating', complete: 'Complete', disconnected: 'Disconnected', starting: 'Starting' };
+    el.textContent = labels[s] || s;
+}
+
+function updateStats(data) {
+    document.getElementById('stat-episode').textContent = data.episode + 1;
+    document.getElementById('stat-steps').textContent = formatNum(data.total_steps);
+    document.getElementById('stat-epsilon').textContent = data.epsilon.toFixed(3);
+    if (data.loss != null) document.getElementById('stat-loss').textContent = data.loss.toFixed(4);
+
+    const recent = episodeLinesHistory.slice(-10);
+    const avg = recent.reduce((s, p) => s + p.y, 0) / recent.length;
+    document.getElementById('stat-avg-lines').textContent = avg.toFixed(2);
+}
+
+function addGameToList(data) {
+    const list = document.getElementById('game-list');
+    const idx = games.length - 1;
+    const div = document.createElement('div');
+    div.className = 'game-entry';
+    div.onclick = () => selectGame(idx);
+
+    const goodClass = data.lines >= 3 ? ' good' : '';
+    div.innerHTML = `
+        <span class="game-ep">#${data.episode}</span>
+        <span class="game-lines${goodClass}">${data.lines} ln</span>
+        <span class="game-score">${data.score} pts</span>
+        <span class="game-ep">${data.pieces}pc</span>
+    `;
+    list.insertBefore(div, list.firstChild);
+
+    // Cap displayed entries
+    while (list.children.length > 200) list.removeChild(list.lastChild);
+}
+
+function formatNum(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+    return n.toString();
+}
+
+// =========================================================================
+// Tab switching
+// =========================================================================
+function switchTab(tab) {
+    document.querySelectorAll('.panel-tab').forEach(t => t.classList.toggle('active', t.textContent.trim().toLowerCase() === tab));
+    document.getElementById('tab-games').classList.toggle('active', tab === 'games');
+    document.getElementById('tab-changelog').classList.toggle('active', tab === 'changelog');
+    if (tab === 'changelog') fetchChangelog();
+}
+
+// =========================================================================
+// Changelog
+// =========================================================================
+let changelogData = [];
+let changelogPollTimer = null;
+
+function fetchChangelog() {
+    fetch('/api/changelog')
+        .then(r => r.json())
+        .then(entries => {
+            if (entries.length !== changelogData.length) {
+                changelogData = entries;
+                renderChangelog();
+            }
+        })
+        .catch(() => {});
+}
+
+function renderChangelog() {
+    const list = document.getElementById('changelog-list');
+    list.innerHTML = '';
+
+    if (changelogData.length === 0) {
+        list.innerHTML = '<div style="padding:20px;color:var(--text-dim);text-align:center;font-size:12px;">No autoresearch iterations yet.<br>Run /autoresearch to start.</div>';
+        return;
+    }
+
+    for (let i = changelogData.length - 1; i >= 0; i--) {
+        const e = changelogData[i];
+        const div = document.createElement('div');
+        div.className = 'changelog-entry';
+
+        const badgeClass = e.result === 'KEPT' ? 'badge-kept' : e.result === 'REVERTED' ? 'badge-reverted' : 'badge-baseline';
+        const metricClass = e.delta > 0 ? 'up' : e.delta < 0 ? 'down' : 'neutral';
+        const deltaStr = e.delta != null ? (e.delta >= 0 ? '+' : '') + e.delta.toFixed(2) : '';
+        const metricStr = e.metric != null ? e.metric.toFixed(2) : '-';
+
+        div.innerHTML = `
+            <div class="changelog-header">
+                <span class="changelog-iter">#${e.iteration}</span>
+                <span class="changelog-badge ${badgeClass}">${e.result}</span>
+                <span class="changelog-metric ${metricClass}">${metricStr}${deltaStr ? ' (' + deltaStr + ')' : ''}</span>
+            </div>
+            <div class="changelog-change">${escHtml(e.change)}</div>
+            <div class="changelog-rationale">${escHtml(e.rationale || '')}</div>
+        `;
+        list.appendChild(div);
+    }
+}
+
+function escHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+}
+
+function startChangelogPolling() {
+    if (changelogPollTimer) return;
+    changelogPollTimer = setInterval(() => { fetchChangelog(); fetchStatus(); }, 5000);
+}
+
+// =========================================================================
+// Autoresearch live status
+// =========================================================================
+let lastStatusPhase = 'idle';
+
+function fetchStatus() {
+    fetch('/api/autoresearch-status')
+        .then(r => r.json())
+        .then(renderStatus)
+        .catch(() => {});
+}
+
+function renderStatus(s) {
+    const el = document.getElementById('ar-status');
+    lastStatusPhase = s.phase;
+
+    if (s.phase === 'idle' || !s.phase) {
+        el.classList.add('hidden');
+        return;
+    }
+
+    el.classList.remove('hidden');
+    const phaseLabels = { reading: 'Reading', proposing: 'Proposing', training: 'Training', evaluating: 'Evaluating' };
+    const phaseClass = 'phase-' + s.phase;
+
+    let html = `<div class="ar-status-header">
+        <span class="ar-phase ${phaseClass}">${phaseLabels[s.phase] || s.phase}</span>
+        <span style="color:var(--text-dim)">Iteration #${s.iteration || '?'}</span>
+    </div>`;
+
+    if (s.change) html += `<div class="ar-status-change">${escHtml(s.change)}</div>`;
+    if (s.rationale) html += `<div class="ar-status-rationale">${escHtml(s.rationale)}</div>`;
+
+    const parts = [];
+    if (s.metric_before != null) parts.push('best: ' + s.metric_before.toFixed(2));
+    if (s.metric != null) parts.push('new: ' + s.metric.toFixed(2));
+    if (parts.length) html += `<div class="ar-status-metric">${parts.join(' | ')}</div>`;
+
+    el.innerHTML = html;
+}
+
+// =========================================================================
+// File-based live polling (works when training runs in a separate process)
+// =========================================================================
+let lastMetricEpisode = 0;
+
+function pollBoard() {
+    if (mode !== 'live') return;
+    fetch('/api/live/board')
+        .then(r => r.json())
+        .then(ev => {
+            if (ev.type === 'step') {
+                drawBoard(ev.grid);
+                updateBoardInfo(ev.piece, ev.lines_cleared, ev.score);
+            }
+        })
+        .catch(() => {});
+}
+
+function pollMetrics() {
+    fetch('/api/live/metrics?since=' + lastMetricEpisode)
+        .then(r => r.json())
+        .then(entries => {
+            if (!entries.length) return;
+            for (const m of entries) {
+                if (m.episode >= lastMetricEpisode) {
+                    addMetricPoint(m);
+                    updateStats(m);
+                    lastMetricEpisode = m.episode + 1;
+                }
+            }
+            scheduleChartUpdate();
+        })
+        .catch(() => {});
+}
+
+function startLivePolling() {
+    setInterval(pollBoard, 500);
+    setInterval(pollMetrics, 2000);
+}
+
+// =========================================================================
+// Init
+// =========================================================================
+drawBoard(null);
+connect();
+fetchChangelog();
+fetchStatus();
+startChangelogPolling();
+startLivePolling();
+</script>
+</body>
+</html>
