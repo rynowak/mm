@@ -2,3 +2,7 @@
 raw/
 images/
 metadata.jsonl
+# Review report is regenerable via `python -m bufo.curate report`.
+curate-report.json
+curate-report.csv
+# Note: curation.jsonl (keep/drop decisions) IS tracked — it's a source of truth.

@@ -1,0 +1,48 @@
+# Fixed CLIP-eval set for the bufo generator.
+# Subjects are emoji-style actions deliberately HELD OUT of the training filenames,
+# so a good score is generalization, not recall. The harness builds each prompt as
+#   prompt_template.format(subject=...) + suffix
+# Keep prompt_template + suffix matched to the caption schema the model trained on.
+concept_text: "a bufo, a green cartoon frog sticker"
+prompt_template: "a bufo of {subject}"
+suffix: ", frog emoji sticker, white background"
+clip_model: "openai/clip-vit-base-patch32"
+clipscore_w: 2.5
+seed: 20260610
+images_per_prompt: 4
+num_inference_steps: 30
+guidance_scale: 7.5
+negative_prompt: "photo, realistic, 3d render, cluttered, tiny, text, watermark"
+
+prompts:
+  - "riding a skateboard"
+  - "offering a flower"
+  - "as a ninja"
+  - "drinking bubble tea"
+  - "wearing a tiny crown"
+  - "playing the violin"
+  - "as an astronaut floating in space"
+  - "holding a balloon"
+  - "riding a bicycle"
+  - "as a chef cooking"
+  - "doing yoga"
+  - "wearing headphones"
+  - "as a knight with a sword"
+  - "eating a taco"
+  - "as a vampire"
+  - "surfing a wave"
+  - "painting at an easel"
+  - "as a scientist with a beaker"
+  - "wrapped in a blanket"
+  - "as a pirate captain"
+  - "blowing bubbles"
+  - "as a wizard casting a spell"
+  - "playing chess"
+  - "as a firefighter"
+
+# Cheap subset for the in-training reporter (must be a subset of `prompts`).
+step_prompts:
+  - "riding a skateboard"
+  - "as a ninja"
+  - "offering a flower"
+  - "as an astronaut floating in space"

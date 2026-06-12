@@ -41,26 +41,53 @@ _RAW_URL = "https://raw.githubusercontent.com/{repo}/{ref}/{path}"
 # ----------------------------------------------------------------------------
 
 
-def caption_for(filename: str) -> str:
-    """Derive a training caption from a bufo filename.
+# The caption schema is the shared contract between training captions and the
+# inference (emoji) interface: ``{TRIGGER} {action}{SUFFIX}``. ``bufo`` is the
+# constant trigger; the action rides as a phrase (not "a bufo of …", which read
+# wrong for the verb-style names). The suffix encodes the flat-cartoon / legible
+# sticker style we filter and prompt toward (see docs/bufo-improvements.md).
+TRIGGER = "bufo"
+SUFFIX = ", flat cartoon frog emoji sticker, bold simple shapes, white background"
 
-    The bare word ``bufo`` is the consistent trigger concept; the remaining
-    filename tokens become the subject so prompts like "a bufo of cowboy" work.
+
+def filename_phrase(name: str) -> str:
+    """Extract the action phrase from a bufo filename or shortcode.
+
+    Strips the ``bufo`` trigger from each token and keeps the remainder, so the
+    action is what's left.
+
+    >>> filename_phrase("bufo-offers-cash-money.png")
+    'offers cash money'
+    >>> filename_phrase("awesomebufo")
+    'awesome'
+    >>> filename_phrase("bufo")
+    ''
+    """
+    stem = Path(name).stem.lower()
+    words = (re.sub("bufo", "", w) for w in re.split(r"[-_\s]+", stem))
+    return " ".join(w for w in words if w).strip()
+
+
+def caption_for(filename: str) -> str:
+    """Training caption in the schema ``{TRIGGER} {action}{SUFFIX}``.
 
     >>> caption_for("cowboy-bufo.png")
-    'a bufo of cowboy, frog emoji sticker, white background'
-    >>> caption_for("awesomebufo.png")
-    'a bufo of awesome, frog emoji sticker, white background'
+    'bufo cowboy, flat cartoon frog emoji sticker, bold simple shapes, white background'
     >>> caption_for("bufo.png")
-    'a bufo, frog emoji sticker, white background'
+    'bufo, flat cartoon frog emoji sticker, bold simple shapes, white background'
     """
-    stem = Path(filename).stem.lower()
-    # Strip the trigger word "bufo" from within each token (so "awesomebufo" ->
-    # "awesome"), then keep the non-empty remainders as the subject.
-    words = (re.sub("bufo", "", w) for w in re.split(r"[-_\s]+", stem))
-    subject = " ".join(w for w in words if w).strip()
-    head = f"a bufo of {subject}" if subject else "a bufo"
-    return f"{head}, frog emoji sticker, white background"
+    phrase = filename_phrase(filename)
+    head = f"{TRIGGER} {phrase}" if phrase else TRIGGER
+    return f"{head}{SUFFIX}"
+
+
+def shortcode_to_prompt(code: str) -> str:
+    """Map a Slack emoji shortcode to a generation prompt in the training schema.
+
+    >>> shortcode_to_prompt(":bufo-offers-cash-money:")
+    'bufo offers cash money, flat cartoon frog emoji sticker, bold simple shapes, white background'
+    """
+    return caption_for(code.strip(":"))
 
 
 # ----------------------------------------------------------------------------

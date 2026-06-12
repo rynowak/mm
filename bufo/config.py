@@ -47,6 +47,7 @@ class TrainingConfig(BaseModel):
     amp: bool = True
     snapshot_interval: int = 250  # generate sample bufos during training
     checkpoint_interval: int = 500
+    eval_interval: int = 0  # >0 runs the cheap CLIP eval every N steps (0 disables)
     num_workers: int = 0  # MPS + dataloader fork issues; keep single-process
     # Prompts used for the periodic in-training preview grid.
     snapshot_prompts: list[str] = [
@@ -64,5 +65,29 @@ class BufoLoRAConfig(BaseModel):
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> BufoLoRAConfig:
+        with open(path) as f:
+            return cls.model_validate(yaml.safe_load(f))
+
+
+class EvalConfig(BaseModel):
+    """Fixed CLIP-eval settings + the held-out prompt set."""
+
+    concept_text: str = "a bufo, a green cartoon frog sticker"
+    # prompt = prompt_template.format(subject=...) + suffix. Both track the caption
+    # schema so the benchmark matches each model's training format.
+    prompt_template: str = "a bufo of {subject}"
+    suffix: str = ", frog emoji sticker, white background"
+    clip_model: str = "openai/clip-vit-base-patch32"
+    clipscore_w: float = 2.5
+    seed: int = 20260610  # eval seed, decoupled from training seed
+    images_per_prompt: int = 4
+    num_inference_steps: int = 30
+    guidance_scale: float = 7.5
+    negative_prompt: str = "photo, realistic, 3d render, cluttered, tiny, text, watermark"
+    prompts: list[str] = []  # held-out subjects (no suffix)
+    step_prompts: list[str] = []  # cheap subset for in-training eval
+
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> EvalConfig:
         with open(path) as f:
             return cls.model_validate(yaml.safe_load(f))

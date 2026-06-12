@@ -9,7 +9,7 @@ import pytest
 import torch
 from PIL import Image
 
-from bufo.data import BufoDataset, caption_for, to_square_rgb
+from bufo.data import SUFFIX, BufoDataset, caption_for, filename_phrase, shortcode_to_prompt, to_square_rgb
 
 
 class _StubTokenizer:
@@ -21,11 +21,22 @@ class _StubTokenizer:
         return SimpleNamespace(input_ids=torch.zeros((1, max_length), dtype=torch.long))
 
 
-def test_caption_strips_trigger_word():
-    assert caption_for("cowboy-bufo.png") == "a bufo of cowboy, frog emoji sticker, white background"
-    assert caption_for("awesomebufo.png") == "a bufo of awesome, frog emoji sticker, white background"
-    assert caption_for("bufo.png") == "a bufo, frog emoji sticker, white background"
-    assert caption_for("this-is-fine-bufo.png").startswith("a bufo of this is fine,")
+def test_filename_phrase_strips_trigger():
+    assert filename_phrase("bufo-offers-cash-money.png") == "offers cash money"
+    assert filename_phrase("awesomebufo") == "awesome"
+    assert filename_phrase("bufo") == ""
+    assert filename_phrase("this-is-fine-bufo.png") == "this is fine"
+
+
+def test_caption_uses_schema():
+    assert caption_for("cowboy-bufo.png") == f"bufo cowboy{SUFFIX}"
+    assert caption_for("bufo.png") == f"bufo{SUFFIX}"  # bare trigger, no dangling space
+    assert "flat cartoon" in caption_for("bufo-sip.png")
+
+
+def test_shortcode_matches_caption_path():
+    # The emoji interface and training captions must share one schema.
+    assert shortcode_to_prompt(":bufo-offers-cash-money:") == caption_for("bufo-offers-cash-money.png")
 
 
 def test_to_square_rgb_composites_transparency_on_white():
