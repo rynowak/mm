@@ -9,7 +9,17 @@ import pytest
 import torch
 from PIL import Image
 
-from bufo.data import SUFFIX, BufoDataset, caption_for, filename_phrase, shortcode_to_prompt, to_square_rgb
+from bufo.data import (
+    SUFFIX,
+    BufoDataset,
+    apply_curation,
+    caption_for,
+    filename_phrase,
+    load_curation,
+    save_curation,
+    shortcode_to_prompt,
+    to_square_rgb,
+)
 
 
 class _StubTokenizer:
@@ -71,3 +81,29 @@ def test_dataset_serves_normalized_pairs(tmp_path):
 def test_dataset_requires_prepared_metadata(tmp_path):
     with pytest.raises(FileNotFoundError):
         BufoDataset(tmp_path, _StubTokenizer())
+
+
+def test_to_square_rgb_crop_vs_pad():
+    wide = Image.new("RGBA", (80, 40), (0, 200, 0, 255))
+    assert to_square_rgb(wide, 64, crop=True).size == (64, 64)
+    assert to_square_rgb(wide, 64, crop=False).size == (64, 64)
+
+
+def test_curation_roundtrip_and_apply(tmp_path):
+    curation = {
+        "b0.png": {"file_name": "b0.png", "keep": False},
+        "b1.png": {"file_name": "b1.png", "keep": True, "caption": "bufo override"},
+    }
+    save_curation(tmp_path, curation)
+    assert load_curation(tmp_path) == curation
+
+    records = [{"file_name": f"b{i}.png", "caption": f"bufo {i}"} for i in range(3)]
+    kept = apply_curation(records, curation)
+    names = [r["file_name"] for r in kept]
+    assert names == ["b1.png", "b2.png"]  # b0 dropped
+    assert kept[0]["caption"] == "bufo override"  # b1 overridden
+    assert kept[1]["caption"] == "bufo 2"  # b2 untouched
+
+
+def test_load_curation_absent(tmp_path):
+    assert load_curation(tmp_path) == {}

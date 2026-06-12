@@ -1,0 +1,31 @@
+# Bufo LoRA v2 — rank 32 on the new caption schema (action-phrase + flat-cartoon
+# suffix). First measured improvement over v1 (rank 16, old captions).
+data:
+  resolution: 512
+  random_flip: true
+
+lora:
+  rank: 32
+  alpha: 32
+  dropout: 0.0
+  target_modules: ["to_q", "to_k", "to_v", "to_out.0"]
+
+training:
+  seed: 42
+  base_model: stable-diffusion-v1-5/stable-diffusion-v1-5
+  batch_size: 1
+  grad_accum: 4
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-2
+  warmup_steps: 50
+  max_steps: 800
+  grad_clip: 1.0
+  amp: true
+  snapshot_interval: 400
+  checkpoint_interval: 400
+  num_workers: 0
+  snapshot_prompts:
+    - "bufo riding a skateboard, flat cartoon frog emoji sticker, bold simple shapes, white background"
+    - "bufo as a ninja, flat cartoon frog emoji sticker, bold simple shapes, white background"
+    - "bufo drinking coffee, flat cartoon frog emoji sticker, bold simple shapes, white background"
+    - "bufo crying, flat cartoon frog emoji sticker, bold simple shapes, white background"

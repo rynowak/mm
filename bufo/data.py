@@ -152,26 +152,38 @@ def download_images(cfg: DataConfig, paths: Sequence[str], raw_dir: Path, max_wo
 # ----------------------------------------------------------------------------
 
 
-def to_square_rgb(img: Image.Image, resolution: int) -> Image.Image:
-    """Composite transparency onto white, pad to square, resize to ``resolution``."""
+def to_square_rgb(img: Image.Image, resolution: int, *, crop: bool = False) -> Image.Image:
+    """Composite transparency onto white, square it, resize to ``resolution``.
+
+    ``crop`` center-crops to square (tighter framing, may trim wide images);
+    otherwise pad to square (default — never loses subject, adds white border).
+    """
     rgba = img.convert("RGBA")
     white = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
     flat = Image.alpha_composite(white, rgba).convert("RGB")
     w, h = flat.size
-    side = max(w, h)
-    square = Image.new("RGB", (side, side), (255, 255, 255))
-    square.paste(flat, ((side - w) // 2, (side - h) // 2))
-    return square.resize((resolution, resolution), Image.Resampling.LANCZOS)
+    if crop:
+        side = min(w, h)
+        left, top = (w - side) // 2, (h - side) // 2
+        flat = flat.crop((left, top, left + side, top + side))
+    else:
+        side = max(w, h)
+        square = Image.new("RGB", (side, side), (255, 255, 255))
+        square.paste(flat, ((side - w) // 2, (side - h) // 2))
+        flat = square
+    return flat.resize((resolution, resolution), Image.Resampling.LANCZOS)
 
 
-def preprocess(raw_files: Sequence[Path], images_dir: Path, resolution: int) -> list[dict[str, str]]:
+def preprocess(
+    raw_files: Sequence[Path], images_dir: Path, resolution: int, *, crop: bool = False
+) -> list[dict[str, str]]:
     """Resize each raw PNG into ``images_dir`` and return metadata records."""
     images_dir.mkdir(parents=True, exist_ok=True)
     records: list[dict[str, str]] = []
     for src in sorted(raw_files):
         try:
             with Image.open(src) as im:
-                out = to_square_rgb(im, resolution)
+                out = to_square_rgb(im, resolution, crop=crop)
         except OSError:
             print(f"  skip unreadable {src.name}")
             continue
@@ -179,6 +191,43 @@ def preprocess(raw_files: Sequence[Path], images_dir: Path, resolution: int) -> 
         out.save(images_dir / out_name)
         records.append({"file_name": out_name, "caption": caption_for(src.name)})
     return records
+
+
+def load_curation(data_dir: str | Path) -> dict[str, dict]:
+    """Load per-image keep/drop + caption overrides from ``curation.jsonl``.
+
+    Returns ``{file_name: {keep: bool, caption?: str}}`` (empty if no file).
+    """
+    path = Path(data_dir) / "curation.jsonl"
+    if not path.exists():
+        return {}
+    out: dict[str, dict] = {}
+    for line in path.read_text().splitlines():
+        if line.strip():
+            rec = json.loads(line)
+            out[rec["file_name"]] = rec
+    return out
+
+
+def save_curation(data_dir: str | Path, curation: dict[str, dict]) -> None:
+    """Write ``curation.jsonl`` (one record per file_name, sorted)."""
+    path = Path(data_dir) / "curation.jsonl"
+    with open(path, "w") as f:
+        for _, rec in sorted(curation.items()):
+            f.write(json.dumps(rec) + "\n")
+
+
+def apply_curation(records: list[dict[str, str]], curation: dict[str, dict]) -> list[dict[str, str]]:
+    """Drop images marked ``keep: false`` and apply any caption overrides."""
+    kept: list[dict[str, str]] = []
+    for rec in records:
+        c = curation.get(rec["file_name"])
+        if c is not None and not c.get("keep", True):
+            continue
+        if c is not None and c.get("caption"):
+            rec = {**rec, "caption": c["caption"]}
+        kept.append(rec)
+    return kept
 
 
 def prepare(cfg: DataConfig, *, limit: int | None = None) -> Path:
@@ -191,8 +240,13 @@ def prepare(cfg: DataConfig, *, limit: int | None = None) -> Path:
         paths = paths[:limit]
     print(f"  {len(paths)} files (after exclusions: {cfg.exclude_substrings})")
     raw_files = download_images(cfg, paths, raw_dir)
-    print(f"Preprocessing {len(raw_files)} images to {cfg.resolution}px...")
-    records = preprocess(raw_files, images_dir, cfg.resolution)
+    print(f"Preprocessing {len(raw_files)} images to {cfg.resolution}px (crop={cfg.crop})...")
+    records = preprocess(raw_files, images_dir, cfg.resolution, crop=cfg.crop)
+    curation = load_curation(root)
+    if curation:
+        before = len(records)
+        records = apply_curation(records, curation)
+        print(f"Applied curation.jsonl: {before} -> {len(records)} kept")
     meta_path = root / "metadata.jsonl"
     with open(meta_path, "w") as f:
         for rec in records:

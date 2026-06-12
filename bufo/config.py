@@ -22,6 +22,7 @@ class DataConfig(BaseModel):
     # standalone emoji, and would teach the model partial crops.
     exclude_substrings: list[str] = ["bigbufo_"]
     random_flip: bool = True
+    crop: bool = False  # center-crop to square (tighter) vs pad (default, lossless)
 
 
 class LoRAConfig(BaseModel):
