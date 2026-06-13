@@ -272,6 +272,7 @@ class BufoDataset(Dataset):
         data_dir: str | Path,
         tokenizer: CLIPTokenizer,
         *,
+        tokenizer_2: CLIPTokenizer | None = None,
         resolution: int = 512,
         random_flip: bool = True,
     ) -> None:
@@ -281,6 +282,7 @@ class BufoDataset(Dataset):
             raise FileNotFoundError(f"{meta_path} not found — run `python -m bufo.prepare` first.")
         self.images_dir = root / "images"
         self.tokenizer = tokenizer
+        self.tokenizer_2 = tokenizer_2  # SDXL second encoder; None for sd15
         self.resolution = resolution
         self.random_flip = random_flip
         with open(meta_path) as f:
@@ -291,6 +293,16 @@ class BufoDataset(Dataset):
     def __len__(self) -> int:
         return len(self.records)
 
+    @staticmethod
+    def _encode(tokenizer: CLIPTokenizer, caption: str) -> torch.Tensor:
+        return tokenizer(
+            caption,
+            padding="max_length",
+            truncation=True,
+            max_length=tokenizer.model_max_length,
+            return_tensors="pt",
+        ).input_ids[0]
+
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         rec = self.records[idx]
         with Image.open(self.images_dir / rec["file_name"]) as im:
@@ -299,11 +311,7 @@ class BufoDataset(Dataset):
             img = img.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
         arr = np.asarray(img, dtype=np.float32) / 255.0  # HWC in [0, 1]
         pixel_values = torch.from_numpy(arr).permute(2, 0, 1) * 2.0 - 1.0  # CHW in [-1, 1]
-        input_ids = self.tokenizer(
-            rec["caption"],
-            padding="max_length",
-            truncation=True,
-            max_length=self.tokenizer.model_max_length,
-            return_tensors="pt",
-        ).input_ids[0]
-        return {"pixel_values": pixel_values, "input_ids": input_ids}
+        item = {"pixel_values": pixel_values, "input_ids": self._encode(self.tokenizer, rec["caption"])}
+        if self.tokenizer_2 is not None:
+            item["input_ids_2"] = self._encode(self.tokenizer_2, rec["caption"])
+        return item

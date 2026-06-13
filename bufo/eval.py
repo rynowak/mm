@@ -109,6 +109,7 @@ def evaluate(
     eval_config: EvalConfig,
     *,
     base_model: str = _DEFAULT_BASE,
+    base_kind: str = "sd15",
     device: torch.device | None = None,
     train_data_dir: str = "bufo/data",
     out_dir: Path | None = None,
@@ -125,7 +126,7 @@ def evaluate(
     n_imgs = images_per_prompt if images_per_prompt is not None else eval_config.images_per_prompt
     prompts = [eval_config.prompt_template.format(subject=s) + eval_config.suffix for s in subjects]
 
-    pipe = load_inference_pipeline(base_model, device, Path(checkpoint) if checkpoint else None)
+    pipe = load_inference_pipeline(base_model, device, Path(checkpoint) if checkpoint else None, base_kind=base_kind)
     grids = generate_eval_images(
         pipe,
         prompts,
@@ -263,6 +264,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="CLIP-score a bufo checkpoint")
     parser.add_argument("--lora", type=str, default=None, help="LoRA checkpoint dir (omit for base baseline)")
     parser.add_argument("--base-model", type=str, default=_DEFAULT_BASE)
+    parser.add_argument("--base-kind", type=str, default="sd15", choices=["sd15", "sdxl"])
     parser.add_argument("--eval-config", type=str, default=str(_DEFAULT_EVAL_CONFIG))
     parser.add_argument("--data-dir", type=str, default="bufo/data")
     parser.add_argument("--out", type=str, default=None)
@@ -274,6 +276,7 @@ def main() -> None:
         args.lora,
         cfg,
         base_model=args.base_model,
+        base_kind=args.base_kind,
         train_data_dir=args.data_dir,
         out_dir=Path(args.out) if args.out else None,
         images_per_prompt=args.images_per_prompt,

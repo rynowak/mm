@@ -32,7 +32,7 @@ from torch.utils.data import DataLoader
 
 from bufo.config import BufoLoRAConfig
 from bufo.data import BufoDataset
-from bufo.pipeline import attach_lora, autocast, load_train_components, save_lora, trainable_params
+from bufo.pipeline import attach_lora, autocast, encode_conditioning, load_train_components, save_lora
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -60,24 +60,38 @@ def _noise_target(
 
 @torch.no_grad()
 def _snapshot(comp: TrainComponents, prompts: list[str], out_dir: Path, device: torch.device, seed: int) -> None:
-    """Generate a preview grid from the current LoRA weights."""
-    from diffusers import DPMSolverMultistepScheduler, StableDiffusionPipeline
+    """Generate a preview grid from the current LoRA weights (shares live modules)."""
+    from diffusers import DPMSolverMultistepScheduler, StableDiffusionPipeline, StableDiffusionXLPipeline
     from PIL import Image
 
     comp.unet.eval()
-    pipe = StableDiffusionPipeline(
-        vae=comp.vae,
-        text_encoder=comp.text_encoder,
-        tokenizer=comp.tokenizer,
-        unet=comp.unet,
-        scheduler=DPMSolverMultistepScheduler.from_config(comp.noise_scheduler.config),
-        safety_checker=None,
-        feature_extractor=None,
-        requires_safety_checker=False,
-    )
+    sched = DPMSolverMultistepScheduler.from_config(comp.noise_scheduler.config)
+    if comp.base_kind == "sdxl":
+        pipe: StableDiffusionPipeline | StableDiffusionXLPipeline = StableDiffusionXLPipeline(
+            vae=comp.vae,
+            text_encoder=comp.text_encoder,
+            text_encoder_2=comp.text_encoder_2,
+            tokenizer=comp.tokenizer,
+            tokenizer_2=comp.tokenizer_2,
+            unet=comp.unet,
+            scheduler=sched,
+        )
+        guidance = 5.0
+    else:
+        pipe = StableDiffusionPipeline(
+            vae=comp.vae,
+            text_encoder=comp.text_encoder,
+            tokenizer=comp.tokenizer,
+            unet=comp.unet,
+            scheduler=sched,
+            safety_checker=None,
+            feature_extractor=None,
+            requires_safety_checker=False,
+        )
+        guidance = 7.5
     pipe.set_progress_bar_config(disable=True)
     gen = torch.Generator(device="cpu").manual_seed(seed)
-    images = [pipe(p, num_inference_steps=25, guidance_scale=7.5, generator=gen).images[0] for p in prompts]
+    images = [pipe(p, num_inference_steps=25, guidance_scale=guidance, generator=gen).images[0] for p in prompts]
     w, h = images[0].size
     grid = Image.new("RGB", (w * len(images), h), (255, 255, 255))
     for i, im in enumerate(images):
@@ -100,16 +114,18 @@ def train(
     device = device or get_device()
     print(f"Device: {device}")
 
-    comp = load_train_components(tcfg.base_model, device)
-    attach_lora(comp.unet, config.lora)
+    comp = load_train_components(tcfg.base_model, device, base_kind=tcfg.base_kind)
+    trained = attach_lora(comp, config.lora)
+    trainable_module = torch.nn.ModuleList(trained)  # optimizer + grad-clip view over all adapters
     total = sum(p.numel() for p in comp.unet.parameters())
-    trainable = trainable_params(comp.unet)
-    n_train = sum(p.numel() for p in trainable)
-    print(f"UNet: {total:,} params | LoRA trainable: {n_train:,} ({100 * n_train / total:.2f}%)")
+    n_train = sum(p.numel() for p in trainable_module.parameters() if p.requires_grad)
+    te = "+TE" if config.lora.train_text_encoder else ""
+    print(f"Base: {tcfg.base_kind} | UNet {total:,} params | LoRA{te} trainable: {n_train:,}")
 
     dataset = BufoDataset(
         data_dir or config.data.data_dir,
         comp.tokenizer,
+        tokenizer_2=comp.tokenizer_2,
         resolution=config.data.resolution,
         random_flip=config.data.random_flip,
     )
@@ -122,7 +138,7 @@ def train(
         num_workers=tcfg.num_workers,
     )
 
-    optimizer = create_optimizer(comp.unet, lr=tcfg.learning_rate, weight_decay=tcfg.weight_decay)
+    optimizer = create_optimizer(trainable_module, lr=tcfg.learning_rate, weight_decay=tcfg.weight_decay)
     scheduler = create_scheduler(optimizer, warmup_steps=tcfg.warmup_steps, total_steps=tcfg.max_steps)
 
     if run_dir is None:
@@ -147,11 +163,13 @@ def train(
         for _ in range(tcfg.grad_accum):
             batch = next(data_iter)
             pixel_values = batch["pixel_values"].to(device, dtype=torch.float32)
-            input_ids = batch["input_ids"].to(device)
 
             with torch.no_grad():
                 latents = comp.vae.encode(pixel_values).latent_dist.sample() * scaling
-                encoder_hidden_states = comp.text_encoder(input_ids)[0]
+            # Outside no_grad so text-encoder LoRA gradients flow (frozen -> no graph).
+            cond = encode_conditioning(
+                comp, batch, resolution=config.data.resolution, device=device, dtype=latents.dtype
+            )
 
             noise = torch.randn_like(latents)
             timesteps = torch.randint(0, n_timesteps, (latents.shape[0],), device=device).long()
@@ -159,12 +177,12 @@ def train(
             target = _noise_target(comp, latents, noise, timesteps)
 
             with autocast(device, tcfg.amp):
-                pred = comp.unet(noisy, timesteps, encoder_hidden_states, return_dict=False)[0]
+                pred = comp.unet(noisy, timesteps, return_dict=False, **cond)[0]
                 loss = F.mse_loss(pred.float(), target.float()) / tcfg.grad_accum
             loss.backward()
             step_loss += loss.item()
 
-        grad_norm = clip_grad_norm(comp.unet, tcfg.grad_clip)
+        grad_norm = clip_grad_norm(trainable_module, tcfg.grad_clip)
         optimizer.step()
         scheduler.step()
 
@@ -180,7 +198,7 @@ def train(
             print("  rendering snapshot...")
             _snapshot(comp, tcfg.snapshot_prompts, run_dir / f"snapshot-{step}", device, tcfg.seed)
         if step % tcfg.checkpoint_interval == 0 or step == tcfg.max_steps:
-            save_lora(comp.unet, run_dir / f"checkpoint-{step}")
+            save_lora(comp, run_dir / f"checkpoint-{step}")
 
     if logger is not None:
         logger.close()

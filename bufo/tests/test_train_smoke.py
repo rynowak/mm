@@ -53,3 +53,50 @@ def test_train_two_steps_writes_lora(tmp_path):
     run_dir = train(cfg, data_dir=str(ds_dir), run_dir=tmp_path / "run")
     assert (run_dir / "manifest.json").exists()
     assert (run_dir / "checkpoint-2" / "pytorch_lora_weights.safetensors").exists()
+
+
+def test_train_text_encoder_lora(tmp_path):
+    pytest.importorskip("diffusers")
+    from bufo.config import BufoLoRAConfig, DataConfig, LoRAConfig, TrainingConfig
+    from bufo.train_lora import train
+
+    ds_dir = tmp_path / "ds"
+    _build_dataset(ds_dir)
+    cfg = BufoLoRAConfig(
+        data=DataConfig(resolution=128, random_flip=False),
+        lora=LoRAConfig(rank=4, alpha=4, train_text_encoder=True),  # exercise the TE-LoRA + multi-module optimizer path
+        training=TrainingConfig(
+            batch_size=1, grad_accum=1, max_steps=2, warmup_steps=1, snapshot_interval=0, checkpoint_interval=2
+        ),
+    )
+    run_dir = train(cfg, data_dir=str(ds_dir), run_dir=tmp_path / "run")
+    assert (run_dir / "checkpoint-2" / "pytorch_lora_weights.safetensors").exists()
+
+
+@pytest.mark.skipif(
+    os.environ.get("BUFO_SDXL_SMOKE") != "1",
+    reason="Set BUFO_SDXL_SMOKE=1 (and BUFO_SMOKE=1) to run the SDXL smoke (downloads ~7GB).",
+)
+def test_train_sdxl(tmp_path):
+    pytest.importorskip("diffusers")
+    from bufo.config import BufoLoRAConfig, DataConfig, LoRAConfig, TrainingConfig
+    from bufo.train_lora import train
+
+    ds_dir = tmp_path / "ds"
+    _build_dataset(ds_dir)
+    cfg = BufoLoRAConfig(
+        data=DataConfig(resolution=256, random_flip=False),
+        lora=LoRAConfig(rank=4, alpha=4),
+        training=TrainingConfig(
+            base_kind="sdxl",
+            base_model="stabilityai/stable-diffusion-xl-base-1.0",
+            batch_size=1,
+            grad_accum=1,
+            max_steps=2,
+            warmup_steps=1,
+            snapshot_interval=0,
+            checkpoint_interval=2,
+        ),
+    )
+    run_dir = train(cfg, data_dir=str(ds_dir), run_dir=tmp_path / "run")
+    assert (run_dir / "checkpoint-2" / "pytorch_lora_weights.safetensors").exists()

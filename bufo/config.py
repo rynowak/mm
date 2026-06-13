@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import yaml
 from pydantic import BaseModel
@@ -31,10 +31,14 @@ class LoRAConfig(BaseModel):
     dropout: float = 0.0
     # SD UNet cross/self-attention projection names (peft matches by suffix).
     target_modules: list[str] = ["to_q", "to_k", "to_v", "to_out.0"]
+    # Also adapt the CLIP text encoder(s) — the biggest prompt-adherence lever.
+    train_text_encoder: bool = False
+    text_target_modules: list[str] = ["q_proj", "k_proj", "v_proj", "out_proj"]
 
 
 class TrainingConfig(BaseModel):
     seed: int = 42
+    base_kind: Literal["sd15", "sdxl"] = "sd15"
     base_model: str = "stable-diffusion-v1-5/stable-diffusion-v1-5"
     batch_size: int = 1
     grad_accum: int = 4  # effective batch = batch_size * grad_accum
