@@ -180,7 +180,9 @@ def load_training_state(
     Requires the same LoRA config (adapters must already be attached). Optimizer
     state is moved onto ``device`` since it loads to CPU.
     """
-    state = torch.load(path, map_location="cpu")
+    # weights_only=False: our own checkpoint carries optimizer/scheduler/RNG state
+    # (non-tensor objects), which the torch>=2.6 safe loader rejects.
+    state = torch.load(path, map_location="cpu", weights_only=False)
     for name, module in _adapter_modules(comp).items():
         set_peft_model_state_dict(module, state[name])
     optimizer.load_state_dict(state["optimizer"])
