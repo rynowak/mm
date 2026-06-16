@@ -12,11 +12,13 @@ dependencies = [
     "mm-training",
     "mm-grpo",
     "mm-wordle",
+    "mm-tetris",
     "mm-viz",
     "fastapi>=0.136.3",
     "uvicorn>=0.48.0",
     "jinja2>=3.1.6",
     "python-multipart>=0.0.30",
+    "websockets>=16.0",
     # bufo sample: Stable Diffusion LoRA fine-tuning
     "accelerate>=0.34",
     "diffusers>=0.30",
@@ -33,6 +35,7 @@ mm-model = { workspace = true }
 mm-training = { workspace = true }
 mm-grpo = { workspace = true }
 mm-wordle = { workspace = true }
+mm-tetris = { workspace = true }
 mm-viz = { workspace = true }
 
 [tool.uv.workspace]
@@ -42,6 +45,7 @@ members = [
     "libs/mm-training",
     "libs/mm-grpo",
     "libs/mm-wordle",
+    "libs/mm-tetris",
     "libs/mm-viz",
 ]
 
@@ -63,7 +67,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "TCH"]
 ignore = ["UP017"]
 
 [tool.pytest.ini_options]
-testpaths = ["libs", "wordle/tests", "wordle2/tests", "wordle3/tests", "bufo/tests"]
+testpaths = ["libs", "wordle/tests", "wordle2/tests", "wordle3/tests", "tetris/tests", "bufo/tests"]
 
 # diffusers/transformers ship lazy-import "dummy" fallback objects and no usable
 # type information, so every model/scheduler/pipeline/tokenizer resolves to a
