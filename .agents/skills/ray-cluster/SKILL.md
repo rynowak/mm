@@ -27,23 +27,28 @@ off-VPN every URL times out (HTTP 000).
 
 Default to **swedencentral (A100)** for experiments; leave **westus3 (production)** alone unless told.
 
-## Node environment (verified by probe)
+## Node environment (the baked image)
 
-Head + GPU workers: **conda Python 3.9**, `pip` (no `uv`), **`torch 2.4.1+cu121`**
-preinstalled, **A100 80GB / CUDA 12.1**. Project deps (`diffusers`, `transformers`,
-`peft`, `accelerate`, `safetensors`, …) are **NOT** present — add them per job via
-`runtime_env` pip. GPU nodes **autoscale from zero**, so the first GPU job sits
-`PENDING` for a few minutes while Azure provisions the node.
+Pods run a **prebuilt image** `ray-app:2.40.0-gpu` (from `docker/Dockerfile`) — the
+primary dep mechanism. Baked in: **Python 3.9**, **`torch 2.4.1+cu121`** (CUDA 12.1),
+**`numpy<2`** (pinned), `mlflow-skinny`, Ray 2.40.0. `pip` is present; **`uv` is NOT**.
+Pods have PyPI egress, so *per-job* deps go through Ray `runtime_env` pip. GPU nodes
+**autoscale from zero**, so the first GPU job sits `PENDING` a few minutes.
 
 Implications:
-- **Keep the base torch** (`+cu121`) — only pip-add the missing libs (never list `torch`).
-- **Leave deps unpinned.** The repo's py3.12 pins **fail to install on py3.9** (e.g. `transformers==5.11`
-  needs ≥3.10). Unpinned, pip resolves working py3.9 wheels — verified: `diffusers 0.36`,
-  `transformers 4.57`, `peft 0.17`, `accelerate 1.10`. For exact-version reproduction, ship a py3.12
-  **container image** instead. (Write code that's robust across these versions.)
-- Base is **Python 3.9** (repo targets 3.12) → avoid 3.10+ runtime syntax, or ship a container.
-- **No `uv` on nodes** → don't `uv sync`; pip-install third-party deps and put the uv-workspace
-  libs on `PYTHONPATH`.
+- **Don't list `torch` or `numpy`** in `runtime_env` pip — they're baked, and numpy is
+  pinned `<2` (pulling numpy≥2 risks an ABI break with the baked torch).
+- **Leave the rest unpinned.** The repo's py3.12 pins fail on py3.9 (e.g.
+  `transformers==5.11` needs ≥3.10); unpinned, pip resolves py3.9 wheels — verified
+  `diffusers 0.36 / transformers 4.57 / peft 0.17`. Write code robust across versions.
+- For **exact-version reproduction**, build a sibling image from `docker/Dockerfile`
+  (override the torch pin / `TORCH_INDEX_URL`) — don't fight it with heavy pip overrides.
+- Base is **Python 3.9** (repo targets 3.12) → avoid 3.10+ runtime syntax, or use a custom image.
+- **No `uv`** → don't `uv sync`; pip the third-party deps + put workspace libs on `PYTHONPATH`.
+- **MLflow:** if you use it, keep `mlflow-skinny==2.22.0` and `protobuf<4` (Ray-2.40 compat).
+- **One GPU only.** Quota is 1×A100 (sweden) / 1×H100 (westus3); request **exactly**
+  `--entrypoint-num-gpus 1`. You can't get >1 GPU, and parallel jobs **queue** on the
+  single GPU — for two concurrent runs, use both clusters.
 
 ## Submitting a job
 
@@ -61,9 +66,10 @@ uvx --from "ray[default]==2.40.0" ray job submit \
   -- python your_script.py
 ```
 
-- **`--entrypoint-num-gpus 1`** requests a GPU (triggers A100 autoscale).
-- **`--working-dir .`** uploads the cwd. **Always `excludes`** big/regenerable dirs
-  (`runs`, data, `.venv`, `.git`) or the upload exceeds Ray's size cap and fails.
+- **`--entrypoint-num-gpus 1`** — required, and **must be exactly 1** (single-GPU
+  quota). Without it the job silently runs CPU-only.
+- **`--working-dir .`** uploads the cwd (~100 MiB cap). **Always `excludes`** big/
+  regenerable dirs (`runs`, data, `.venv`, `.git`) — or use a `.rayignore` file.
 - **uv-workspace local libs:** don't pip-install them — add their `src` dirs to `PYTHONPATH`
   via `env_vars` and run as a module.
 - **Data:** the node has none — fetch/prepare it in the entrypoint or read from shared storage.
@@ -75,14 +81,21 @@ ADDR=http://ray-picasso-dash-swc.swedencentral.cloudapp.azure.com:8265
 uvx --from "ray[default]==2.40.0" ray job submit --address "$ADDR" \
   --working-dir . --entrypoint-num-gpus 1 \
   --runtime-env-json '{
-    "pip":["diffusers","transformers","peft","accelerate","safetensors","pyyaml"],
-    "excludes":["runs","bufo/data",".venv",".git"],
-    "env_vars":{"HF_HUB_DISABLE_TELEMETRY":"1",
+    "pip":["diffusers","transformers","peft","accelerate","safetensors","pyyaml","tensorboard"],
+    "excludes":["runs","bufo/data",".venv",".git","wordle","wordle2","wordle3","docs"],
+    "env_vars":{"HF_HUB_DISABLE_TELEMETRY":"1","HF_HOME":"/mnt/ray/hf",
       "PYTHONPATH":"libs/mm-tokenizers/src:libs/mm-model/src:libs/mm-training/src:libs/mm-grpo/src:libs/mm-wordle/src:libs/mm-viz/src"}}' \
-  -- bash -lc "python -m bufo.prepare && python -m bufo.train_lora --config bufo/configs/lora-sdxl.yaml"
+  -- bash -lc "mkdir -p /mnt/ray/bufo-runs /mnt/ray/hf /mnt/ray/bufo-data; \
+       ln -sfn /mnt/ray/bufo-runs runs; ln -sfn /mnt/ray/bufo-data bufo/data; \
+       python -m bufo.prepare --config bufo/configs/lora-sdxl.yaml && \
+       python -m bufo.train_lora --config bufo/configs/lora-sdxl.yaml"
 ```
 
-A100 turns the ~3 h MPS SDXL run into ~15–30 min, and the ~40 min eval into ~2–3 min.
+Notes from real runs: `tensorboard` **must** be in the pip list (importing
+`mm_training` loads `SummaryWriter`). Symlink `runs/` and `HF_HOME` onto **`/mnt/ray`**
+(100 GB Azure Files NFS) so checkpoints + the ~7 GB SDXL cache survive node teardown
+and are reused. Verified: a 600-step SDXL+TE-LoRA run is **~27 min** and a 24-prompt
+eval **~3-5 min** on the A100 (vs hours / ~40 min on MPS).
 
 ## Monitoring
 
@@ -96,7 +109,12 @@ A100 turns the ~3 h MPS SDXL run into ~15–30 min, and the ~40 min eval into ~2
 
 - **VPN required** — off-VPN: HTTP 000 / timeouts.
 - **First GPU job is slow to *start*** — `PENDING` while the A100 autoscales (minutes); later jobs reuse the warm node.
-- **working_dir size cap** — always `excludes` `runs/`, data, `.venv`, `.git`.
-- **Python 3.9 base** — pin deps; avoid 3.10+ runtime syntax (or supply a container image).
+- **working_dir size cap (~100 MiB)** — `excludes` `runs/`, data, `.venv`, `.git` (or `.rayignore`).
+- **Single-GPU quota** — one GPU per cluster; parallel sweeps **queue**. For two
+  concurrent runs, use both clusters (A100 sweden + H100 westus3).
+- **Don't override baked `torch`/`numpy`** (numpy pinned `<2`); needing different pins → custom image.
+- **`tensorboard` in the pip list** if you import `mm_training`.
+- **Persist to `/mnt/ray`** — node-local `runs/` vanishes on scale-down; symlink it (+ `HF_HOME`) to the NFS.
+- **Python 3.9 base** — avoid 3.10+ runtime syntax (or supply a custom image).
 - **Incremental progress (repo rule)** — submit jobs that checkpoint/resume (`--resume`) and stream
   flushed progress, so a preemption/timeout never throws the run away.
