@@ -183,7 +183,7 @@ def score_generations(
 
     results: list[PromptResult] = []
     all_full: list[torch.Tensor] = []
-    for pi, (subject, prompt, images) in enumerate(zip(subjects, prompts, grids, strict=True)):
+    for pi, (subject, prompt, images) in enumerate(zip(subjects, prompts, grids)):  # noqa: B905 — py3.9 has no strict=
         full = embedder.embed_images(images)
         small = embedder.embed_images([to_emoji(im) for im in images])
         all_full.append(full)
@@ -271,7 +271,7 @@ def render_contact_sheet(
         f"cartoon {scorecard.cartoon:+.3f} | memor_max {scorecard.memorization_max:.3f}",
         fill=(0, 0, 0),
     )
-    for pi, (row, res) in enumerate(zip(grids, results, strict=True)):
+    for pi, (row, res) in enumerate(zip(grids, results)):  # noqa: B905 — py3.9 has no strict=
         y = header + pi * cell
         label = (
             f"{res.subject}\nidentity {res.identity:.2f}  adher {res.prompt_adherence:.2f}\n"

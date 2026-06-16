@@ -131,6 +131,11 @@ eval **~3-5 min** on the A100 (vs hours / ~40 min on MPS).
 - **Don't override baked `torch`/`numpy`** (numpy pinned `<2`); needing different pins → custom image.
 - **`tensorboard` in the pip list** if you import `mm_training`.
 - **Persist to `/mnt/ray`** — node-local `runs/` vanishes on scale-down; symlink it (+ `HF_HOME`) to the NFS.
-- **Python 3.9 base** — avoid 3.10+ runtime syntax (or supply a custom image).
+- **Python 3.9 base** — avoid 3.10+ runtime syntax: no `zip(..., strict=)` (3.10),
+  `datetime.UTC` (3.11 → use `timezone.utc`), or `int.bit_count()` (3.10 → `bin(x).count("1")`).
+  Or supply a custom py3.12 image.
+- **Don't rely on symlinks for NFS data** — point `prepare`/`eval`/`train`/`recaption` at
+  the absolute path via `--data-dir /mnt/ray/bufo-data` (a `bufo/data` symlink silently
+  wrote ephemeral on the node).
 - **Incremental progress (repo rule)** — submit jobs that checkpoint/resume (`--resume`) and stream
   flushed progress, so a preemption/timeout never throws the run away.
