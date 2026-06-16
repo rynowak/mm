@@ -8,6 +8,7 @@ ML training playground for pre-training and reinforcement learning. Sample/refer
 - **Fix ALL failures, not just the first.** Tests, lint, type check — fix everything. Iterate until green.
 - **Stay focused** on the current component. Reference other components for context only.
 - **Cross-component work**: only when explicitly asked.
+- **Incremental progress is REQUIRED for all work.** Design every long-running job (training, eval, data prep, sweeps) to make durable, observable progress — never an all-or-nothing run. That means: checkpoint **and** resume (`--resume`); persist partial results as they're produced, not only at the end; and stream flushed progress with an ETA. A crash, cutoff, or dead battery must never lose more than the last interval, and you must always be able to see how far along a run is. If you can't show progress or resume it, redesign before running it.
 
 ## Operating Guidelines
 
