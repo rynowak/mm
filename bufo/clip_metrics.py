@@ -121,7 +121,9 @@ class ClipEmbedder:
     def load(cls, model_name: str, device: torch.device) -> ClipEmbedder:
         from transformers import CLIPModel, CLIPProcessor
 
-        model = CLIPModel.from_pretrained(model_name).to(device).eval()
+        # use_safetensors=True: avoids torch.load of .bin, which the cluster's
+        # torch<2.6 refuses (CVE-2025-32434). Pick a CLIP repo that ships safetensors.
+        model = CLIPModel.from_pretrained(model_name, use_safetensors=True).to(device).eval()
         processor = CLIPProcessor.from_pretrained(model_name)
         return cls(model=model, processor=processor, device=device, model_name=model_name)
 

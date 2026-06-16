@@ -83,7 +83,9 @@ class EvalConfig(BaseModel):
     # schema so the benchmark matches each model's training format.
     prompt_template: str = "a bufo of {subject}"
     suffix: str = ", frog emoji sticker, white background"
-    clip_model: str = "openai/clip-vit-base-patch32"
+    # laion ViT-B/32 ships safetensors (openai/clip-vit-base-patch32 is .bin-only,
+    # which fails to load on the cluster's torch<2.6 — CVE-2025-32434). Same arch.
+    clip_model: str = "laion/CLIP-ViT-B-32-laion2B-s34B-b79K"
     clipscore_w: float = 2.5
     seed: int = 20260610  # eval seed, decoupled from training seed
     images_per_prompt: int = 4

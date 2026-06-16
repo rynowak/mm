@@ -103,7 +103,7 @@ def test_embedder_shapes_and_norm():
 
     from bufo.clip_metrics import ClipEmbedder
 
-    emb = ClipEmbedder.load("openai/clip-vit-base-patch32", get_device())
+    emb = ClipEmbedder.load("laion/CLIP-ViT-B-32-laion2B-s34B-b79K", get_device())
     imgs = [Image.new("RGB", (32, 32), c) for c in [(200, 0, 0), (0, 200, 0), (0, 0, 200)]]
     img_emb = emb.embed_images(imgs)
     txt_emb = emb.embed_texts(["a bufo", "a frog"])
@@ -126,7 +126,7 @@ def test_train_embedding_cache_roundtrip(tmp_path):
     (tmp_path / "metadata.jsonl").write_text(
         "\n".join(json.dumps({"file_name": f"b{i}.png", "caption": f"bufo {i}"}) for i in range(3))
     )
-    emb = ClipEmbedder.load("openai/clip-vit-base-patch32", get_device())
+    emb = ClipEmbedder.load("laion/CLIP-ViT-B-32-laion2B-s34B-b79K", get_device())
     e1, n1 = load_or_build_train_embeddings(emb, tmp_path, cache_dir=tmp_path / ".cache")
     e2, n2 = load_or_build_train_embeddings(emb, tmp_path, cache_dir=tmp_path / ".cache")
     assert n1 == n2 == ["b0.png", "b1.png", "b2.png"]

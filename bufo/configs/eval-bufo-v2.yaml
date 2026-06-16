@@ -4,7 +4,7 @@
 concept_text: "a bufo, a green cartoon frog sticker"
 prompt_template: "bufo {subject}"
 suffix: ", flat cartoon frog emoji sticker, bold simple shapes, white background"
-clip_model: "openai/clip-vit-base-patch32"
+clip_model: "laion/CLIP-ViT-B-32-laion2B-s34B-b79K"
 clipscore_w: 2.5
 seed: 20260610
 images_per_prompt: 4
