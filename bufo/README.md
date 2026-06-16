@@ -69,6 +69,37 @@ bf16 autocast for the UNet forward. The base model (~4GB) downloads once to the
 Hugging Face cache. SD 2.1-base is gated; `stable-diffusion-v1-5/stable-diffusion-v1-5`
 and `stabilityai/sd-turbo` are open and work as `training.base_model`.
 
+## Running on the Ray cluster (CUDA)
+
+MPS is memory-rich but compute-modest; SDXL runs are hours locally. The
+`picasso` Ray clusters (A100/H100) run the **same code** ~10× faster — `amp: true`
+flips on bf16 autocast + `torch.compile` automatically on CUDA. Jobs are submitted
+via the Ray Jobs API (`ray job submit … -- python -m bufo.train_lora …`); metrics
+go to MLflow; GPUs are monitored in Grafana.
+
+**The URLs are VPN/corp-network gated** (not reachable off-VPN). Submit jobs from a
+VPN-connected machine.
+
+**swedencentral — A100 (new; use this for experiments)**
+
+| Service | URL |
+|---------|-----|
+| Ray Dashboard / Jobs API | http://ray-picasso-dash-swc.swedencentral.cloudapp.azure.com:8265 |
+| MLflow | http://ray-picasso-mlflow-swc.swedencentral.cloudapp.azure.com |
+| Grafana | http://ray-picasso-grafana-swc.swedencentral.cloudapp.azure.com |
+
+**westus3 — H100 (production; leave alone unless coordinated)**
+
+| Service | URL |
+|---------|-----|
+| Ray Dashboard / Jobs API | http://ray-picasso-dash.westus3.cloudapp.azure.com:8265 |
+| MLflow | http://ray-picasso-mlflow.westus3.cloudapp.azure.com |
+| Grafana | http://ray-picasso-grafana.westus3.cloudapp.azure.com |
+
+> TODO: finalize the `ray job submit` command once the cluster's env convention is
+> confirmed (base image vs `runtime_env` pip; whether `uv` is on the nodes for the
+> workspace libs; GPU-request flag). The code itself needs no changes for CUDA.
+
 ## Layout
 
 | File | Role |
