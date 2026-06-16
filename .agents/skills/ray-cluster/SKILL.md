@@ -27,6 +27,22 @@ off-VPN every URL times out (HTTP 000).
 
 Default to **swedencentral (A100)** for experiments; leave **westus3 (production)** alone unless told.
 
+## VPN access (required)
+
+The cluster URLs are reachable **only over the Azure VPN `MSFT-AzVPN-Manual`**
+(`com.microsoft.AzureVpnMac`) — *not* Tailscale. When it drops, every cluster URL
+times out (**HTTP 000**); jobs keep running server-side (outputs still land on
+`/mnt/ray`), only your ability to *query* them is lost.
+
+- **Liveness probe:** `curl -s -m 10 -o /dev/null -w '%{http_code}' "$ADDR/api/version"`
+  → `200` = up, `000`/timeout = VPN down.
+- **Check state:** `scutil --nc list` (look for `"MSFT-AzVPN-Manual"  (Connected)`) or
+  `scutil --nc status "MSFT-AzVPN-Manual"`.
+- **Reconnect (fixable):** `scutil --nc start "MSFT-AzVPN-Manual"`, then re-probe until
+  `200`. It may require interactive auth/MFA via the Azure VPN app — if `scutil` start
+  doesn't restore it, ask the user to reconnect.
+- **A VPN drop never loses work** — re-run the status poll against the same job IDs once `200` returns.
+
 ## Node environment (the baked image)
 
 Pods run a **prebuilt image** `ray-app:2.40.0-gpu` (from `docker/Dockerfile`) — the
