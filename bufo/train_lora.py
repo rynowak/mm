@@ -66,6 +66,24 @@ def _noise_target(
     raise ValueError(f"Unsupported prediction_type: {pred_type}")
 
 
+def diffusion_loss(
+    pred: torch.Tensor, target: torch.Tensor, timesteps: torch.Tensor, comp: TrainComponents, min_snr_gamma: float
+) -> torch.Tensor:
+    """MSE loss, optionally min-SNR-weighted (arXiv:2303.09556) when gamma > 0.
+
+    Min-SNR rebalances per-timestep loss so high-noise steps don't dominate —
+    faster, more stable convergence.
+    """
+    if min_snr_gamma <= 0:
+        return F.mse_loss(pred.float(), target.float())
+    acp = comp.noise_scheduler.alphas_cumprod.to(timesteps.device)[timesteps]
+    snr = acp / (1.0 - acp)
+    weight = torch.clamp(snr, max=min_snr_gamma)
+    weight = weight / (snr + 1.0) if comp.noise_scheduler.config.prediction_type == "v_prediction" else weight / snr
+    per_sample = F.mse_loss(pred.float(), target.float(), reduction="none").mean(dim=list(range(1, pred.ndim)))
+    return (weight * per_sample).mean()
+
+
 @torch.no_grad()
 def _snapshot(comp: TrainComponents, prompts: list[str], out_dir: Path, device: torch.device, seed: int) -> None:
     """Generate a preview grid from the current LoRA weights (shares live modules)."""
@@ -202,7 +220,7 @@ def train(
 
             with autocast(device, tcfg.amp):
                 pred = comp.unet(noisy, timesteps, return_dict=False, **cond)[0]
-                loss = F.mse_loss(pred.float(), target.float()) / tcfg.grad_accum
+                loss = diffusion_loss(pred, target, timesteps, comp, tcfg.min_snr_gamma) / tcfg.grad_accum
             loss.backward()
             step_loss += loss.item()
 

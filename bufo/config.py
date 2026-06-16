@@ -47,6 +47,7 @@ class TrainingConfig(BaseModel):
     warmup_steps: int = 50
     max_steps: int = 1500
     grad_clip: float = 1.0
+    min_snr_gamma: float = 0.0  # >0 enables min-SNR loss weighting (5.0 is typical)
     # bf16 autocast is CUDA-gated (fp32 eager on MPS/CPU for stability), mirroring
     # the wordle samples.
     amp: bool = True
