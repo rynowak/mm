@@ -54,6 +54,7 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.11",
     "ty>=0.0.42",
+    "vermin>=1.8",
 ]
 
 [tool.ruff]

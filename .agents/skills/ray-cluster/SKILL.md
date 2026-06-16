@@ -45,8 +45,10 @@ times out (**HTTP 000**); jobs keep running server-side (outputs still land on
 
 ## Node environment (the baked image)
 
-Pods run a **prebuilt image** `ray-app:2.40.0-gpu` (from `docker/Dockerfile`) — the
-primary dep mechanism. Baked in: **Python 3.9**, **`torch 2.4.1+cu121`** (CUDA 12.1),
+Pods run a **prebuilt image** `ray-app:2.40.0-gpu` — owned by Cameron's **raygun** repo
+(KubeRay-on-AKS infra; built via Terraform `az acr build` → ACR, deployed as the worker
+pod image). We don't maintain it; treat it as fixed. Baked in: **Python 3.9**,
+**`torch 2.4.1+cu121`** (CUDA 12.1),
 **`numpy<2`** (pinned), `mlflow-skinny`, Ray 2.40.0. `pip` is present; **`uv` is NOT**.
 Pods have PyPI egress, so *per-job* deps go through Ray `runtime_env` pip. GPU nodes
 **autoscale from zero**, so the first GPU job sits `PENDING` a few minutes.
@@ -57,9 +59,11 @@ Implications:
 - **Leave the rest unpinned.** The repo's py3.12 pins fail on py3.9 (e.g.
   `transformers==5.11` needs ≥3.10); unpinned, pip resolves py3.9 wheels — verified
   `diffusers 0.36 / transformers 4.57 / peft 0.17`. Write code robust across versions.
-- For **exact-version reproduction**, build a sibling image from `docker/Dockerfile`
-  (override the torch pin / `TORCH_INDEX_URL`) — don't fight it with heavy pip overrides.
-- Base is **Python 3.9** (repo targets 3.12) → avoid 3.10+ runtime syntax, or use a custom image.
+- **Verify py3.9 compat locally before you submit** — `make verify-cluster` runs `vermin`
+  against the cluster-bound code (bufo/ + mm-training) and fails on any 3.10+ feature, so
+  the silent version breaks surface in seconds locally instead of on a failed remote run.
+- Base is **Python 3.9** (repo targets 3.12) → avoid 3.10+ runtime syntax. Write
+  version-robust code; `make verify-cluster` is the gate.
 - **No `uv`** → don't `uv sync`; pip the third-party deps + put workspace libs on `PYTHONPATH`.
 - **MLflow:** if you use it, keep `mlflow-skinny==2.22.0` and `protobuf<4` (Ray-2.40 compat).
 - **One GPU only.** Quota is 1×A100 (sweden) / 1×H100 (westus3); request **exactly**
@@ -113,27 +117,23 @@ Notes from real runs: `tensorboard` **must** be in the pip list (importing
 and are reused. Verified: a 600-step SDXL+TE-LoRA run is **~27 min** and a 24-prompt
 eval **~3-5 min** on the A100 (vs hours / ~40 min on MPS).
 
-## Custom image (the drift-killer)
+## Custom image (rarely worth it — it's raygun's, not ours)
 
-The repeated cluster failures all came from **local (py3.12) ≠ cluster base image
-(py3.9)**. The definitive fix is a custom image that *is* our stack, so jobs run the
-exact environment we develop against. `docker/Dockerfile` + `docker/build-and-push.sh`:
+The cluster image is **owned by Cameron's `raygun` repo** (KubeRay-on-AKS Terraform), not
+this repo: `docker/requirements.txt` + `docker/Dockerfile` → `az acr build` → ACR
+(`rayacrswed110c2c4` for the swedencentral A100 site, RG `rg-ray-aks-swedencentral`),
+consumed as the worker **pod image**. There is **no per-job container `runtime_env`**.
+ACR auth is Entra/RBAC with admin disabled; the only standing grant is **`AcrPull`** → the
+AKS kubelet identity, and **pushing** needs **`AcrPush`** on your Entra identity
+(`az role assignment create --assignee <upn> --role AcrPush --scope <acr-id>`). Base is
+**py3.9 by design** (its MLflow-2.x / click-8.1.7 pins); bumping to py3.12 ripples through
+shared infra. So baking our deps = a PR to raygun (`requirements.txt`) + an AcrPush grant +
+Cameron's `terraform apply`.
 
-- **Base** `rayproject/ray:2.40.0-py312-gpu` (Ray 2.40 to match the control plane, but
-  **py3.12**) + our pinned deps (`torch 2.4.1+cu121`, diffusers/transformers/peft/…).
-- **Deps baked, code shipped per-job** (`--working-dir` + PYTHONPATH) → image stable
-  across code changes; rebuild only when deps change. A `RUN python -c "import …"` line
-  fails the build if deps conflict (catches it locally, not on the cluster).
-
-```bash
-REG=<registry> ./docker/build-and-push.sh          # cross-builds linux/amd64 + pushes
-REG=local NO_PUSH=1 ./docker/build-and-push.sh     # local build + import smoke only
-```
-
-Two open infra questions for the cluster owner: **(1)** the registry to push to (ACR
-name + `az acr login`), and **(2)** how a job consumes a custom image — per-job
-`runtime_env {"container": {"image": …}}` (if enabled), or a RayCluster/worker-group
-deployed with it. Once it's the job runtime, the py3.9 trap list above no longer applies.
+**We don't do this.** The py3.9 image + per-job `runtime_env` pip already runs our SDXL
+train + eval, and `make verify-cluster` keeps our code py3.9-clean — so the drift is gone
+without a custom image. Reach for one only if per-job pip latency ever justifies the
+cross-repo coordination.
 
 ## Monitoring
 
