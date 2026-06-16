@@ -235,8 +235,10 @@ def render_contact_sheet(
     """One row per prompt (label gutter + its images), header with overall scores."""
     if not grids or not grids[0]:
         return
-    cell = grids[0][0].size[0]
-    gutter, header = 320, 40
+    # Thumbnail each cell — full-res (e.g. SDXL 1024) makes a 24k-px sheet that
+    # viewers render as blank.
+    cell = 224
+    gutter, header = 240, 36
     cols = max(len(r) for r in grids)
     width = gutter + cols * cell
     height = header + len(grids) * cell
@@ -257,7 +259,7 @@ def render_contact_sheet(
         )
         draw.multiline_text((8, y + 8), label, fill=(0, 0, 0), spacing=3)
         for n, im in enumerate(row):
-            sheet.paste(im, (gutter + n * cell, y))
+            sheet.paste(im.resize((cell, cell)), (gutter + n * cell, y))
     sheet.save(out_path)
 
 
