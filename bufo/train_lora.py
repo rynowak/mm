@@ -31,8 +31,9 @@ from mm_training import (
 )
 from torch.utils.data import DataLoader
 
-from bufo.config import BufoLoRAConfig
+from bufo.config import BufoLoRAConfig, EvalConfig
 from bufo.data import BufoDataset
+from bufo.eval import generate_eval_images, score_generations
 from bufo.pipeline import (
     attach_lora,
     autocast,
@@ -84,16 +85,13 @@ def diffusion_loss(
     return (weight * per_sample).mean()
 
 
-@torch.no_grad()
-def _snapshot(comp: TrainComponents, prompts: list[str], out_dir: Path, device: torch.device, seed: int) -> None:
-    """Generate a preview grid from the current LoRA weights (shares live modules)."""
+def build_live_pipe(comp: TrainComponents) -> object:
+    """Inference pipeline over the live (LoRA-adorned) components — for previews + eval."""
     from diffusers import DPMSolverMultistepScheduler, StableDiffusionPipeline, StableDiffusionXLPipeline
-    from PIL import Image
 
-    comp.unet.eval()
     sched = DPMSolverMultistepScheduler.from_config(comp.noise_scheduler.config)
     if comp.base_kind == "sdxl":
-        pipe: StableDiffusionPipeline | StableDiffusionXLPipeline = StableDiffusionXLPipeline(
+        pipe: object = StableDiffusionXLPipeline(
             vae=comp.vae,
             text_encoder=comp.text_encoder,
             text_encoder_2=comp.text_encoder_2,
@@ -102,7 +100,6 @@ def _snapshot(comp: TrainComponents, prompts: list[str], out_dir: Path, device: 
             unet=comp.unet,
             scheduler=sched,
         )
-        guidance = 5.0
     else:
         pipe = StableDiffusionPipeline(
             vae=comp.vae,
@@ -114,10 +111,23 @@ def _snapshot(comp: TrainComponents, prompts: list[str], out_dir: Path, device: 
             feature_extractor=None,
             requires_safety_checker=False,
         )
-        guidance = 7.5
     pipe.set_progress_bar_config(disable=True)
+    return pipe
+
+
+def _guidance(comp: TrainComponents) -> float:
+    return 5.0 if comp.base_kind == "sdxl" else 7.5
+
+
+@torch.no_grad()
+def _snapshot(comp: TrainComponents, prompts: list[str], out_dir: Path, device: torch.device, seed: int) -> None:
+    """Generate a preview grid from the current LoRA weights (shares live modules)."""
+    from PIL import Image
+
+    comp.unet.eval()
+    pipe = build_live_pipe(comp)
     gen = torch.Generator(device="cpu").manual_seed(seed)
-    images = [pipe(p, num_inference_steps=25, guidance_scale=guidance, generator=gen).images[0] for p in prompts]
+    images = [pipe(p, num_inference_steps=25, guidance_scale=_guidance(comp), generator=gen).images[0] for p in prompts]
     w, h = images[0].size
     grid = Image.new("RGB", (w * len(images), h), (255, 255, 255))
     for i, im in enumerate(images):
@@ -127,6 +137,50 @@ def _snapshot(comp: TrainComponents, prompts: list[str], out_dir: Path, device: 
     comp.unet.train()
 
 
+class EvalReporter:
+    """Cheap in-training CLIP eval — a few held-out prompts scored every eval_interval.
+
+    Loads CLIP + the train embeddings once; logs ``eval/*`` scalars so quality is
+    visible mid-run (alongside ``train/loss``).
+    """
+
+    def __init__(self, eval_config: EvalConfig, train_data_dir: str, device: torch.device, logger: object) -> None:
+        from bufo.clip_metrics import ClipEmbedder, load_or_build_train_embeddings
+
+        self.cfg = eval_config
+        self.logger = logger
+        self.embedder = ClipEmbedder.load(eval_config.clip_model, device)
+        self.train_emb, self.train_names = load_or_build_train_embeddings(self.embedder, train_data_dir)
+        self.subjects = eval_config.step_prompts or eval_config.prompts[:4]
+        self.prompts = [eval_config.prompt_template.format(subject=s) + eval_config.suffix for s in self.subjects]
+
+    @torch.no_grad()
+    def report(self, comp: TrainComponents, step: int) -> None:
+        comp.unet.eval()
+        grids = generate_eval_images(
+            build_live_pipe(comp),
+            self.prompts,
+            images_per_prompt=1,
+            steps=25,
+            guidance=_guidance(comp),
+            negative_prompt=self.cfg.negative_prompt,
+            seed=self.cfg.seed,
+        )
+        sc = score_generations(
+            grids, self.subjects, self.prompts, self.embedder, self.train_emb, self.train_names, self.cfg, step=step
+        )
+        comp.unet.train()
+        if self.logger is not None:
+            keys = ("identity", "prompt_adherence", "legibility", "cartoon", "diversity_overall", "memorization_max")
+            for key in keys:
+                self.logger.log_scalar(f"eval/{key}", float(getattr(sc, key)), step)
+        print(
+            f"  eval {step}: identity {sc.identity:.3f} | adher {sc.prompt_adherence:.3f} | "
+            f"legib {sc.legibility:.3f} | cartoon {sc.cartoon:+.3f} | memor {sc.memorization_max:.3f}",
+            flush=True,
+        )
+
+
 def train(
     config: BufoLoRAConfig,
     *,
@@ -134,6 +188,7 @@ def train(
     run_dir: Path | None = None,
     device: torch.device | None = None,
     resume: str | None = None,
+    eval_config: EvalConfig | None = None,
 ) -> Path:
     """Run LoRA fine-tuning. Returns the run directory holding LoRA checkpoints.
 
@@ -193,6 +248,10 @@ def train(
         experiment="bufo-lora", config=config.model_dump(), seed=tcfg.seed, dataset_id="all-the-bufo"
     ).save(run_dir / "manifest.json")
 
+    reporter = None
+    if tcfg.eval_interval and eval_config is not None:
+        reporter = EvalReporter(eval_config, data_dir or config.data.data_dir, device, logger)
+
     comp.unet.train()
     data_iter = _infinite(loader)
     scaling = comp.vae.config.scaling_factor
@@ -243,6 +302,8 @@ def train(
             logger.log_scalar("train/grad_norm", grad_norm, step)
             logger.log_scalar("train/lr", float(scheduler.get_last_lr()[0]), step)
 
+        if reporter is not None and step % tcfg.eval_interval == 0:
+            reporter.report(comp, step)
         if tcfg.snapshot_interval and (step % tcfg.snapshot_interval == 0 or step == tcfg.max_steps):
             print("  rendering snapshot...", flush=True)
             _snapshot(comp, tcfg.snapshot_prompts, run_dir / f"snapshot-{step}", device, tcfg.seed)
@@ -263,6 +324,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", type=str, default=None, help="Override dataset dir")
     parser.add_argument("--max-steps", type=int, default=None, help="Override config max_steps (quick runs)")
     parser.add_argument("--resume", type=str, default=None, help="Resume from a checkpoint dir or training_state.pt")
+    parser.add_argument("--eval-config", type=str, default=None, help="EvalConfig YAML for in-training CLIP eval")
     return parser.parse_args()
 
 
@@ -271,7 +333,8 @@ def main() -> None:
     config = BufoLoRAConfig.from_yaml(args.config)
     if args.max_steps is not None:
         config.training.max_steps = args.max_steps
-    train(config, data_dir=args.data_dir, resume=args.resume)
+    eval_config = EvalConfig.from_yaml(args.eval_config) if args.eval_config else None
+    train(config, data_dir=args.data_dir, resume=args.resume, eval_config=eval_config)
 
 
 if __name__ == "__main__":

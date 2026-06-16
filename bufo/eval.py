@@ -139,11 +139,47 @@ def evaluate(
     )
 
     embedder = clip_embedder or ClipEmbedder.load(eval_config.clip_model, device)
+    train_emb, train_names = load_or_build_train_embeddings(embedder, train_data_dir)
+    scorecard = score_generations(
+        grids,
+        subjects,
+        prompts,
+        embedder,
+        train_emb,
+        train_names,
+        eval_config,
+        step=step,
+        checkpoint=str(checkpoint) if checkpoint else None,
+    )
+
+    if write_artifacts:
+        out_dir = out_dir or _default_out_dir()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        _save_images(grids, scorecard.per_prompt, out_dir)
+        write_scorecard(scorecard, out_dir)
+        render_contact_sheet(grids, scorecard.per_prompt, scorecard, out_dir / "contact_sheet.png")
+        print(f"Wrote scorecard + contact sheet to {out_dir}")
+    return scorecard
+
+
+def score_generations(
+    grids: list[list[Image.Image]],
+    subjects: list[str],
+    prompts: list[str],
+    embedder: ClipEmbedder,
+    train_emb: torch.Tensor,
+    train_names: list[str],
+    eval_config: EvalConfig,
+    *,
+    step: int | None = None,
+    checkpoint: str | None = None,
+) -> EvalScorecard:
+    """Compute the CLIP scorecard for already-generated images (shared by the CLI
+    and the in-training reporter)."""
     concept_emb = embedder.embed_texts([eval_config.concept_text])[0]
     cartoon_emb = embedder.embed_texts([CARTOON_TEXT])[0]
     photo_emb = embedder.embed_texts([PHOTO_TEXT])[0]
     prompt_embs = embedder.embed_texts(prompts)
-    train_emb, train_names = load_or_build_train_embeddings(embedder, train_data_dir)
 
     results: list[PromptResult] = []
     all_full: list[torch.Tensor] = []
@@ -151,24 +187,17 @@ def evaluate(
         full = embedder.embed_images(images)
         small = embedder.embed_images([to_emoji(im) for im in images])
         all_full.append(full)
-
-        identity = top_k_mean_similarity(full, train_emb).mean().item()
-        concept = clipscore(full @ concept_emb, eval_config.clipscore_w).mean().item()
-        adher = clipscore(full @ prompt_embs[pi], eval_config.clipscore_w).mean().item()
-        legib = clipscore(small @ concept_emb, eval_config.clipscore_w).mean().item()
-        cartoon = style_score(full, cartoon_emb, photo_emb).mean().item()
         nn_vals, nn_idx = nearest_neighbor(full, train_emb)
-
         results.append(
             PromptResult(
                 subject=subject,
                 prompt=prompt,
-                identity=identity,
-                concept_fidelity=concept,
-                prompt_adherence=adher,
+                identity=top_k_mean_similarity(full, train_emb).mean().item(),
+                concept_fidelity=clipscore(full @ concept_emb, eval_config.clipscore_w).mean().item(),
+                prompt_adherence=clipscore(full @ prompt_embs[pi], eval_config.clipscore_w).mean().item(),
                 diversity=mean_pairwise_distance(full),
-                legibility=legib,
-                cartoon=cartoon,
+                legibility=clipscore(small @ concept_emb, eval_config.clipscore_w).mean().item(),
+                cartoon=style_score(full, cartoon_emb, photo_emb).mean().item(),
                 memorization_max=nn_vals.max().item(),
                 nearest_train=[train_names[i] for i in nn_idx.tolist()],
             )
@@ -176,12 +205,12 @@ def evaluate(
 
     all_emb = torch.cat(all_full)
     nn_all, _ = nearest_neighbor(all_emb, train_emb)
-    scorecard = EvalScorecard(
-        checkpoint=str(checkpoint) if checkpoint else None,
+    return EvalScorecard(
+        checkpoint=checkpoint,
         step=step,
         clip_model=eval_config.clip_model,
         seed=eval_config.seed,
-        images_per_prompt=n_imgs,
+        images_per_prompt=len(grids[0]) if grids else 0,
         n_prompts=len(subjects),
         identity=top_k_mean_similarity(all_emb, train_emb).mean().item(),
         concept_fidelity=_mean(r.concept_fidelity for r in results),
@@ -194,15 +223,6 @@ def evaluate(
         cartoon=_mean(r.cartoon for r in results),
         per_prompt=results,
     )
-
-    if write_artifacts:
-        out_dir = out_dir or _default_out_dir()
-        out_dir.mkdir(parents=True, exist_ok=True)
-        _save_images(grids, results, out_dir)
-        write_scorecard(scorecard, out_dir)
-        render_contact_sheet(grids, results, scorecard, out_dir / "contact_sheet.png")
-        print(f"Wrote scorecard + contact sheet to {out_dir}")
-    return scorecard
 
 
 def _mean(xs) -> float:
