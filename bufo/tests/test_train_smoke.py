@@ -73,6 +73,37 @@ def test_train_text_encoder_lora(tmp_path):
     assert (run_dir / "checkpoint-2" / "pytorch_lora_weights.safetensors").exists()
 
 
+def test_resume_continues_training(tmp_path):
+    pytest.importorskip("diffusers")
+    from bufo.config import BufoLoRAConfig, DataConfig, LoRAConfig, TrainingConfig
+    from bufo.train_lora import train
+
+    ds_dir = tmp_path / "ds"
+    _build_dataset(ds_dir)
+
+    def _cfg(max_steps: int) -> BufoLoRAConfig:
+        return BufoLoRAConfig(
+            data=DataConfig(resolution=128, random_flip=False),
+            lora=LoRAConfig(rank=4, alpha=4),
+            training=TrainingConfig(
+                batch_size=1,
+                grad_accum=1,
+                max_steps=max_steps,
+                warmup_steps=1,
+                snapshot_interval=0,
+                checkpoint_interval=2,
+            ),
+        )
+
+    run = tmp_path / "run"
+    train(_cfg(2), data_dir=str(ds_dir), run_dir=run)
+    assert (run / "checkpoint-2" / "training_state.pt").exists()  # resumable state written
+    # Resume from step 2 -> train to step 4 in the same run dir.
+    train(_cfg(4), data_dir=str(ds_dir), run_dir=run, resume=str(run / "checkpoint-2"))
+    assert (run / "checkpoint-4" / "pytorch_lora_weights.safetensors").exists()
+    assert (run / "checkpoint-4" / "training_state.pt").exists()
+
+
 @pytest.mark.skipif(
     os.environ.get("BUFO_SDXL_SMOKE") != "1",
     reason="Set BUFO_SDXL_SMOKE=1 (and BUFO_SMOKE=1) to run the SDXL smoke (downloads ~7GB).",

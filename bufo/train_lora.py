@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import torch
@@ -32,11 +33,18 @@ from torch.utils.data import DataLoader
 
 from bufo.config import BufoLoRAConfig
 from bufo.data import BufoDataset
-from bufo.pipeline import attach_lora, autocast, encode_conditioning, load_train_components, save_lora
+from bufo.pipeline import (
+    attach_lora,
+    autocast,
+    encode_conditioning,
+    load_train_components,
+    load_training_state,
+    save_lora,
+    save_training_state,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from pathlib import Path
 
     from bufo.pipeline import TrainComponents
 
@@ -107,8 +115,14 @@ def train(
     data_dir: str | None = None,
     run_dir: Path | None = None,
     device: torch.device | None = None,
+    resume: str | None = None,
 ) -> Path:
-    """Run LoRA fine-tuning. Returns the run directory holding LoRA checkpoints."""
+    """Run LoRA fine-tuning. Returns the run directory holding LoRA checkpoints.
+
+    ``resume`` points at a checkpoint dir (or its ``training_state.pt``) to continue
+    a run — restores adapters, optimizer, scheduler, step, and RNG. Requires the
+    same LoRA config.
+    """
     tcfg = config.training
     seed_everything(tcfg.seed)
     device = device or get_device()
@@ -141,11 +155,21 @@ def train(
     optimizer = create_optimizer(trainable_module, lr=tcfg.learning_rate, weight_decay=tcfg.weight_decay)
     scheduler = create_scheduler(optimizer, warmup_steps=tcfg.warmup_steps, total_steps=tcfg.max_steps)
 
+    resume_step = 0
+    if resume:
+        rp = Path(resume)
+        state_path = rp / "training_state.pt" if rp.is_dir() else rp
+        if run_dir is None:
+            run_dir = state_path.parent.parent  # checkpoint-N/training_state.pt -> run dir
+        resume_step = load_training_state(state_path, comp, optimizer, scheduler, device)
+        print(f"Resumed from step {resume_step}: {state_path}")
+
+    logger: MetricsLogger | None = None
     if run_dir is None:
-        logger: MetricsLogger | None = MetricsLogger(experiment="bufo-lora")
+        logger = MetricsLogger(experiment="bufo-lora")
         run_dir = logger.log_dir
-    else:
-        logger = None
+    elif resume:
+        logger = MetricsLogger(experiment="bufo-lora", run_dir=run_dir)  # keep logging in the same run
     print(f"Run dir: {run_dir}")
     RunManifest.capture(
         experiment="bufo-lora", config=config.model_dump(), seed=tcfg.seed, dataset_id="all-the-bufo"
@@ -157,7 +181,7 @@ def train(
     n_timesteps = comp.noise_scheduler.config.num_train_timesteps
     t0 = time.time()
 
-    for step in range(1, tcfg.max_steps + 1):
+    for step in range(resume_step + 1, tcfg.max_steps + 1):
         optimizer.zero_grad()
         step_loss = 0.0
         for _ in range(tcfg.grad_accum):
@@ -198,7 +222,9 @@ def train(
             print("  rendering snapshot...")
             _snapshot(comp, tcfg.snapshot_prompts, run_dir / f"snapshot-{step}", device, tcfg.seed)
         if step % tcfg.checkpoint_interval == 0 or step == tcfg.max_steps:
-            save_lora(comp, run_dir / f"checkpoint-{step}")
+            ckpt_dir = run_dir / f"checkpoint-{step}"
+            save_lora(comp, ckpt_dir)  # inference weights
+            save_training_state(comp, optimizer, scheduler, step, ckpt_dir)  # resumable state
 
     if logger is not None:
         logger.close()
@@ -211,6 +237,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--data-dir", type=str, default=None, help="Override dataset dir")
     parser.add_argument("--max-steps", type=int, default=None, help="Override config max_steps (quick runs)")
+    parser.add_argument("--resume", type=str, default=None, help="Resume from a checkpoint dir or training_state.pt")
     return parser.parse_args()
 
 
@@ -219,7 +246,7 @@ def main() -> None:
     config = BufoLoRAConfig.from_yaml(args.config)
     if args.max_steps is not None:
         config.training.max_steps = args.max_steps
-    train(config, data_dir=args.data_dir)
+    train(config, data_dir=args.data_dir, resume=args.resume)
 
 
 if __name__ == "__main__":

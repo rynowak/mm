@@ -10,9 +10,11 @@ always, plus the text encoder(s) when ``train_text_encoder``).
 from __future__ import annotations
 
 import contextlib
+import random
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import numpy as np
 import torch
 from diffusers import (
     AutoencoderKL,
@@ -23,11 +25,14 @@ from diffusers import (
 )
 from diffusers.utils import convert_state_dict_to_diffusers
 from peft import LoraConfig
-from peft.utils import get_peft_model_state_dict
+from peft.utils import get_peft_model_state_dict, set_peft_model_state_dict
 from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizer
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from torch.optim import Optimizer
+    from torch.optim.lr_scheduler import LRScheduler
 
     from bufo.config import LoRAConfig as BufoLoRAConfig
 
@@ -134,6 +139,60 @@ def save_lora(comp: TrainComponents, out_dir: Path) -> None:
             text_encoder_lora_layers=_adapter_state(comp.text_encoder),
             safe_serialization=True,
         )
+
+
+def _adapter_modules(comp: TrainComponents) -> dict[str, torch.nn.Module]:
+    """Trainable LoRA-bearing modules keyed by a stable name (for resume)."""
+    mods: dict[str, torch.nn.Module] = {"unet_lora": comp.unet}
+    if getattr(comp.text_encoder, "peft_config", None):
+        mods["text_encoder_lora"] = comp.text_encoder
+    if comp.text_encoder_2 is not None and getattr(comp.text_encoder_2, "peft_config", None):
+        mods["text_encoder_2_lora"] = comp.text_encoder_2
+    return mods
+
+
+def save_training_state(
+    comp: TrainComponents, optimizer: Optimizer, scheduler: LRScheduler, step: int, out_dir: Path
+) -> None:
+    """Save a full resumable checkpoint: adapters + optimizer + scheduler + step + RNG.
+
+    Sits beside the inference ``pytorch_lora_weights.safetensors`` in the same dir.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    state: dict = {
+        "step": step,
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict(),
+        "rng_torch": torch.get_rng_state(),
+        "rng_numpy": np.random.get_state(),
+        "rng_python": random.getstate(),
+    }
+    for name, module in _adapter_modules(comp).items():
+        state[name] = get_peft_model_state_dict(module)
+    torch.save(state, out_dir / "training_state.pt")
+
+
+def load_training_state(
+    path: Path, comp: TrainComponents, optimizer: Optimizer, scheduler: LRScheduler, device: torch.device
+) -> int:
+    """Restore a checkpoint saved by :func:`save_training_state`. Returns the step.
+
+    Requires the same LoRA config (adapters must already be attached). Optimizer
+    state is moved onto ``device`` since it loads to CPU.
+    """
+    state = torch.load(path, map_location="cpu")
+    for name, module in _adapter_modules(comp).items():
+        set_peft_model_state_dict(module, state[name])
+    optimizer.load_state_dict(state["optimizer"])
+    for opt_state in optimizer.state.values():
+        for key, value in opt_state.items():
+            if isinstance(value, torch.Tensor):
+                opt_state[key] = value.to(device)
+    scheduler.load_state_dict(state["scheduler"])
+    torch.set_rng_state(state["rng_torch"])
+    np.random.set_state(state["rng_numpy"])
+    random.setstate(state["rng_python"])
+    return int(state["step"])
 
 
 def encode_conditioning(
