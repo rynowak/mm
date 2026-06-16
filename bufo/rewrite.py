@@ -40,7 +40,10 @@ def clean_action(text: str) -> str:
     """
     line = next((ln for ln in text.strip().splitlines() if ln.strip()), "")
     line = line.lower().strip(" .!?,:;\"'`")
-    return " ".join(w for w in line.split() if w != "bufo").strip()
+    words = [w for w in line.split() if w != "bufo"]
+    while words and words[0] in ("a", "an", "the"):  # drop a leading article
+        words.pop(0)
+    return " ".join(words).strip()
 
 
 class Rewriter(Protocol):
