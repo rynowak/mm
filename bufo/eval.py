@@ -89,6 +89,7 @@ def generate_eval_images(
     pipe.set_progress_bar_config(disable=True)
     grids: list[list[Image.Image]] = []
     for pi, prompt in enumerate(prompts):
+        print(f"  gen {pi + 1}/{len(prompts)}: {prompt[:48]}", flush=True)
         row: list[Image.Image] = []
         for n in range(images_per_prompt):
             gen = torch.Generator(device="cpu").manual_seed(seed + pi * 1000 + n)

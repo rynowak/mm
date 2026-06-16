@@ -212,14 +212,21 @@ def train(
 
         if step % 10 == 0 or step == 1:
             elapsed = time.time() - t0
-            print(f"step {step:>5d}/{tcfg.max_steps} | loss {step_loss:.4f} | grad {grad_norm:.2f} | {elapsed:.0f}s")
+            done = step - resume_step
+            eta = elapsed / done * (tcfg.max_steps - step) if done else 0.0
+            # flush so backgrounded runs show live progress in the captured output
+            print(
+                f"step {step:>5d}/{tcfg.max_steps} | loss {step_loss:.4f} | "
+                f"grad {grad_norm:.2f} | {elapsed:.0f}s | eta {eta:.0f}s",
+                flush=True,
+            )
         if logger is not None:
             logger.log_scalar("train/loss", step_loss, step)
             logger.log_scalar("train/grad_norm", grad_norm, step)
             logger.log_scalar("train/lr", float(scheduler.get_last_lr()[0]), step)
 
         if tcfg.snapshot_interval and (step % tcfg.snapshot_interval == 0 or step == tcfg.max_steps):
-            print("  rendering snapshot...")
+            print("  rendering snapshot...", flush=True)
             _snapshot(comp, tcfg.snapshot_prompts, run_dir / f"snapshot-{step}", device, tcfg.seed)
         if step % tcfg.checkpoint_interval == 0 or step == tcfg.max_steps:
             ckpt_dir = run_dir / f"checkpoint-{step}"
