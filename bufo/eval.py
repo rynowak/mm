@@ -287,7 +287,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="CLIP-score a bufo checkpoint")
     parser.add_argument("--lora", type=str, default=None, help="LoRA checkpoint dir (omit for base baseline)")
     parser.add_argument("--base-model", type=str, default=_DEFAULT_BASE)
-    parser.add_argument("--base-kind", type=str, default="sd15", choices=["sd15", "sdxl"])
+    parser.add_argument("--base-kind", type=str, default="sd15", choices=["sd15", "sdxl", "flux"])
     parser.add_argument("--eval-config", type=str, default=str(_DEFAULT_EVAL_CONFIG))
     parser.add_argument("--data-dir", type=str, default="bufo/data")
     parser.add_argument("--out", type=str, default=None)

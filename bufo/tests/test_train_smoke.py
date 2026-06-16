@@ -105,6 +105,36 @@ def test_resume_continues_training(tmp_path):
 
 
 @pytest.mark.skipif(
+    os.environ.get("BUFO_FLUX_SMOKE") != "1",
+    reason="Set BUFO_FLUX_SMOKE=1 to run the FLUX smoke (downloads ~30GB + needs an A100).",
+)
+def test_train_flux(tmp_path):
+    pytest.importorskip("diffusers")
+    from bufo.config import BufoLoRAConfig, DataConfig, LoRAConfig, TrainingConfig
+    from bufo.train_lora import train
+
+    ds_dir = tmp_path / "ds"
+    _build_dataset(ds_dir)
+    cfg = BufoLoRAConfig(
+        data=DataConfig(resolution=256, random_flip=False),
+        lora=LoRAConfig(rank=4, alpha=4),
+        training=TrainingConfig(
+            base_kind="flux",
+            base_model="black-forest-labs/FLUX.1-dev",
+            batch_size=1,
+            grad_accum=1,
+            max_steps=2,
+            warmup_steps=1,
+            snapshot_interval=0,
+            checkpoint_interval=2,
+            flux_max_sequence_length=64,  # keep the smoke fast
+        ),
+    )
+    run_dir = train(cfg, data_dir=str(ds_dir), run_dir=tmp_path / "run")
+    assert (run_dir / "checkpoint-2" / "pytorch_lora_weights.safetensors").exists()
+
+
+@pytest.mark.skipif(
     os.environ.get("BUFO_SDXL_SMOKE") != "1",
     reason="Set BUFO_SDXL_SMOKE=1 (and BUFO_SMOKE=1) to run the SDXL smoke (downloads ~7GB).",
 )

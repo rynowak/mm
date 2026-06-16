@@ -85,9 +85,169 @@ def diffusion_loss(
     return (weight * per_sample).mean()
 
 
+# ----------------------------------------------------------------------------
+# FLUX.1 flow-matching (rectified flow)
+#
+# All math below mirrors diffusers' examples/dreambooth/train_dreambooth_lora_flux.py
+# (diffusers >= 0.30; verified against v0.38.0) and FluxPipeline static helpers, so
+# it stays auditable against the reference. Function names from the reference are
+# cited inline.
+# ----------------------------------------------------------------------------
+
+
+def _pack_latents(latents: torch.Tensor) -> torch.Tensor:
+    """Pack 2x2 latent patches into a token sequence. Mirrors FluxPipeline._pack_latents.
+
+    [B, C, H, W] -> [B, (H/2)*(W/2), C*4]. H and W must be even (true for SD/flux
+    VAE latents at any /16 image resolution).
+    """
+    b, c, h, w = latents.shape
+    latents = latents.view(b, c, h // 2, 2, w // 2, 2)
+    latents = latents.permute(0, 2, 4, 1, 3, 5)
+    return latents.reshape(b, (h // 2) * (w // 2), c * 4)
+
+
+def _prepare_latent_image_ids(height: int, width: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    """Positional ids for the packed image tokens. Mirrors FluxPipeline._prepare_latent_image_ids.
+
+    ``height``/``width`` are the *packed* grid dims (latent H/2, W/2). Returns
+    [height*width, 3]: channel 0 is zero, channels 1/2 are the row/col index.
+    """
+    latent_image_ids = torch.zeros(height, width, 3)
+    latent_image_ids[..., 1] = latent_image_ids[..., 1] + torch.arange(height)[:, None]
+    latent_image_ids[..., 2] = latent_image_ids[..., 2] + torch.arange(width)[None, :]
+    h, w, c = latent_image_ids.shape
+    return latent_image_ids.reshape(h * w, c).to(device=device, dtype=dtype)
+
+
+def _sd3_loss_weighting(scheme: str, sigmas: torch.Tensor) -> torch.Tensor:
+    """SD3/flux loss weighting hook. Mirrors diffusers compute_loss_weighting_for_sd3.
+
+    ``sigmas`` is the per-sample sigma broadcastable to the latent. "none" (default)
+    is uniform weighting — start here; the other schemes are available as a hook.
+    """
+    import math
+
+    if scheme == "sigma_sqrt":
+        return (sigmas**-2.0).float()
+    if scheme == "cosmap":
+        bot = 1 - 2 * sigmas + 2 * sigmas**2
+        return 2 / (math.pi * bot)
+    return torch.ones_like(sigmas)
+
+
+def sample_flux_sigmas(batch_size: int, logit_mean: float, logit_std: float, device: torch.device) -> torch.Tensor:
+    """Per-sample timestep density t in (0, 1) via logit-normal sampling.
+
+    Mirrors diffusers compute_density_for_timestep_sampling(weighting_scheme=
+    "logit_normal"): t = sigmoid(normal(logit_mean, logit_std)). For the default
+    FlowMatchEulerDiscreteScheduler, sigma == t exactly (scheduler sigma =
+    timestep / num_train_timesteps), so we use t directly as the flow sigma and
+    pass timesteps = t * 1000 to the transformer. This is the continuous form of
+    the reference's `indices = (u * num_train_timesteps).long()` quantization.
+    """
+    u = torch.normal(mean=logit_mean, std=logit_std, size=(batch_size,), device=device)
+    return torch.sigmoid(u)
+
+
+def flux_flow_match_loss(comp: TrainComponents, batch: dict, cfg: object, device: torch.device) -> torch.Tensor:
+    """One flux flow-matching training step. Returns the scalar (unscaled) loss.
+
+    Rectified-flow objective, mirroring the train_dreambooth_lora_flux.py loop:
+
+      latents = (vae.encode(x).sample - shift_factor) * scaling_factor
+      t       = sigmoid(normal(logit_mean, logit_std))         # logit-normal density
+      sigma   = t                                              # flow sigma
+      noisy   = (1 - sigma) * latents + sigma * noise          # zt = (1-t)x + t*z1
+      target  = noise - latents                                # velocity (z1 - x)
+      pred    = transformer(pack(noisy), timestep=t, guidance=g, ...) -> unpack
+      loss    = mean( w(sigma) * (pred - target)^2 )           # w = SD3 weighting (none by default)
+
+    The transformer is fed the 2x2-packed latents + latent_image_ids; text comes in
+    as pooled CLIP (pooled_projections) + T5 sequence (encoder_hidden_states) + txt_ids.
+    """
+    from diffusers import FluxPipeline
+
+    vae = comp.vae
+    transformer = comp.unet
+    shift_factor = vae.config.shift_factor
+    scaling_factor = vae.config.scaling_factor
+
+    # Encode at the VAE's own dtype (bf16 for flux) — feeding fp32 pixels into a bf16
+    # VAE is a dtype-mismatch crash. Flux's VAE is bf16-safe (unlike SDXL's fp16 VAE).
+    pixel_values = batch["pixel_values"].to(device, dtype=vae.dtype)
+    with torch.no_grad():
+        latents = vae.encode(pixel_values).latent_dist.sample()
+    # diffusers: model_input = (model_input - shift_factor) * scaling_factor
+    latents = (latents - shift_factor) * scaling_factor
+
+    # Conditioning (outside no_grad in principle; encoders frozen -> no graph).
+    cond = encode_conditioning(comp, batch, resolution=0, device=device, dtype=latents.dtype)
+
+    bsz, channels, lat_h, lat_w = latents.shape
+    noise = torch.randn_like(latents)
+
+    # Logit-normal timestep density; sigma == t for the default flow scheduler.
+    t = sample_flux_sigmas(bsz, cfg.flux_logit_mean, cfg.flux_logit_std, device).to(dtype=latents.dtype)
+    sigma = t.view(bsz, 1, 1, 1)  # broadcast over [B, C, H, W]
+    noisy = (1.0 - sigma) * latents + sigma * noise  # zt = (1 - t) x + t z1
+
+    packed_noisy = _pack_latents(noisy)
+    latent_image_ids = _prepare_latent_image_ids(lat_h // 2, lat_w // 2, device, latents.dtype)
+
+    # Guidance: FLUX.1-dev is guidance-distilled (config.guidance_embeds True) and
+    # needs an embedded guidance vector; schnell (guidance_embeds False) takes None.
+    if getattr(transformer.config, "guidance_embeds", False):
+        guidance = torch.full((bsz,), float(cfg.flux_guidance), device=device, dtype=latents.dtype)
+    else:
+        guidance = None
+
+    with autocast(device, cfg.amp):
+        model_pred = transformer(
+            hidden_states=packed_noisy,
+            timestep=t,  # reference passes timesteps/1000 == t (transformer rescales by 1000 internally)
+            guidance=guidance,
+            pooled_projections=cond["pooled_projections"],
+            encoder_hidden_states=cond["encoder_hidden_states"],
+            txt_ids=cond["txt_ids"],
+            img_ids=latent_image_ids,
+            return_dict=False,
+        )[0]
+        # _unpack_latents back to [B, C, H, W] so it aligns with target.
+        vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
+        model_pred = FluxPipeline._unpack_latents(
+            model_pred,
+            height=lat_h * vae_scale_factor,
+            width=lat_w * vae_scale_factor,
+            vae_scale_factor=vae_scale_factor,
+        )
+        # flow-matching target = velocity = noise - latents (== z1 - x).
+        target = noise - latents
+        weighting = _sd3_loss_weighting(cfg.flux_weighting_scheme, sigma)
+        loss = torch.mean(
+            (weighting.float() * (model_pred.float() - target.float()) ** 2).reshape(bsz, -1), dim=1
+        ).mean()
+    return loss
+
+
 def build_live_pipe(comp: TrainComponents) -> object:
     """Inference pipeline over the live (LoRA-adorned) components — for previews + eval."""
     from diffusers import DPMSolverMultistepScheduler, StableDiffusionPipeline, StableDiffusionXLPipeline
+
+    if comp.base_kind == "flux":
+        from diffusers import FlowMatchEulerDiscreteScheduler, FluxPipeline
+
+        flux_pipe = FluxPipeline(
+            vae=comp.vae,
+            text_encoder=comp.text_encoder,
+            text_encoder_2=comp.text_encoder_2,
+            tokenizer=comp.tokenizer,
+            tokenizer_2=comp.tokenizer_2,
+            transformer=comp.unet,
+            scheduler=FlowMatchEulerDiscreteScheduler(),
+        )
+        flux_pipe.set_progress_bar_config(disable=True)
+        return flux_pipe
 
     sched = DPMSolverMultistepScheduler.from_config(comp.noise_scheduler.config)
     if comp.base_kind == "sdxl":
@@ -116,6 +276,8 @@ def build_live_pipe(comp: TrainComponents) -> object:
 
 
 def _guidance(comp: TrainComponents) -> float:
+    if comp.base_kind == "flux":
+        return 3.5  # FLUX.1-dev inference default (embedded distilled guidance)
     return 5.0 if comp.base_kind == "sdxl" else 7.5
 
 
@@ -201,13 +363,22 @@ def train(
     device = device or get_device()
     print(f"Device: {device}")
 
-    comp = load_train_components(tcfg.base_model, device, base_kind=tcfg.base_kind)
+    # Flux (12B transformer + 4.7B T5) must load in bf16 to fit an A100 80GB; in fp32
+    # the frozen base weights alone are ~68GB and OOM. LoRA adapter params stay fp32
+    # (forced in attach_lora). sd15/sdxl keep fp32 weights + amp autocast as before.
+    load_dtype = torch.bfloat16 if tcfg.base_kind == "flux" else torch.float32
+    comp = load_train_components(tcfg.base_model, device, base_kind=tcfg.base_kind, dtype=load_dtype)
     trained = attach_lora(comp, config.lora)
+    # Gradient checkpointing on the flux transformer — required to fit 1024px on an
+    # A100 80GB (trades recompute for activation memory).
+    if tcfg.base_kind == "flux" and tcfg.flux_gradient_checkpointing:
+        comp.unet.enable_gradient_checkpointing()
     trainable_module = torch.nn.ModuleList(trained)  # optimizer + grad-clip view over all adapters
     total = sum(p.numel() for p in comp.unet.parameters())
     n_train = sum(p.numel() for p in trainable_module.parameters() if p.requires_grad)
     te = "+TE" if config.lora.train_text_encoder else ""
-    print(f"Base: {tcfg.base_kind} | UNet {total:,} params | LoRA{te} trainable: {n_train:,}")
+    denoiser = "transformer" if tcfg.base_kind == "flux" else "UNet"
+    print(f"Base: {tcfg.base_kind} | {denoiser} {total:,} params | LoRA{te} trainable: {n_train:,}")
 
     dataset = BufoDataset(
         data_dir or config.data.data_dir,
@@ -215,6 +386,8 @@ def train(
         tokenizer_2=comp.tokenizer_2,
         resolution=config.data.resolution,
         random_flip=config.data.random_flip,
+        base_kind=tcfg.base_kind,
+        tokenizer_2_max_length=tcfg.flux_max_sequence_length,
     )
     print(f"Dataset: {len(dataset)} bufos")
     loader = DataLoader(
@@ -254,8 +427,8 @@ def train(
 
     comp.unet.train()
     data_iter = _infinite(loader)
+    is_flux = tcfg.base_kind == "flux"
     scaling = comp.vae.config.scaling_factor
-    n_timesteps = comp.noise_scheduler.config.num_train_timesteps
     t0 = time.time()
 
     for step in range(resume_step + 1, tcfg.max_steps + 1):
@@ -263,8 +436,18 @@ def train(
         step_loss = 0.0
         for _ in range(tcfg.grad_accum):
             batch = next(data_iter)
-            pixel_values = batch["pixel_values"].to(device, dtype=torch.float32)
 
+            if is_flux:
+                # Rectified-flow path: VAE encode + pack + flow-match loss, all inside
+                # flux_flow_match_loss (mirrors train_dreambooth_lora_flux.py).
+                loss = flux_flow_match_loss(comp, batch, tcfg, device) / tcfg.grad_accum
+                loss.backward()
+                step_loss += loss.item()
+                continue
+
+            assert comp.noise_scheduler is not None  # DDPM path (sd15/sdxl) always has one
+            n_timesteps = comp.noise_scheduler.config.num_train_timesteps
+            pixel_values = batch["pixel_values"].to(device, dtype=torch.float32)
             with torch.no_grad():
                 latents = comp.vae.encode(pixel_values).latent_dist.sample() * scaling
             # Outside no_grad so text-encoder LoRA gradients flow (frozen -> no graph).

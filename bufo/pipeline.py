@@ -1,10 +1,16 @@
-"""Stable Diffusion (1.5 + XL) component loading + LoRA helpers.
+"""Stable Diffusion (1.5 + XL) + FLUX.1 component loading + LoRA helpers.
 
-The two model families differ in exactly three places — component loading,
-per-step conditioning, and LoRA save/load — so we branch on a ``base_kind`` flag
-and isolate the divergence behind ``encode_conditioning`` (keeping the training
-loop single-path). The base weights load frozen; only LoRA adapters train (UNet
-always, plus the text encoder(s) when ``train_text_encoder``).
+The model families differ in exactly three places — component loading, per-step
+conditioning, and LoRA save/load — so we branch on a ``base_kind`` flag and
+isolate the divergence behind ``encode_conditioning`` (keeping the conditioning
+call single-path; the train loop branches DDPM-vs-flow-matching once). The base
+weights load frozen; only LoRA adapters train.
+
+- sd15/sdxl: DDPM UNet; LoRA on the UNet (always) + text encoder(s) (optional).
+- flux: rectified-flow ``FluxTransformer2DModel``; LoRA on the transformer
+  attention projections only (both text encoders stay frozen). The "unet" slot
+  on ``TrainComponents`` holds the flux transformer so the optimizer/grad-clip/
+  save plumbing stays uniform.
 """
 
 from __future__ import annotations
@@ -12,7 +18,7 @@ from __future__ import annotations
 import contextlib
 import random
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
@@ -36,26 +42,77 @@ if TYPE_CHECKING:
 
     from bufo.config import LoRAConfig as BufoLoRAConfig
 
+FLUX_DEFAULT_BASE = "black-forest-labs/FLUX.1-dev"
+
 
 @dataclass
 class TrainComponents:
-    """Frozen SD components plus the (LoRA-trainable) UNet. SDXL adds a second
-    tokenizer + text encoder (``CLIPTextModelWithProjection``)."""
+    """Frozen base components plus the (LoRA-trainable) denoiser.
+
+    SDXL adds a second CLIP tokenizer + encoder (``CLIPTextModelWithProjection``).
+    FLUX repurposes the fields: ``unet`` holds the ``FluxTransformer2DModel``,
+    ``text_encoder`` is CLIP (pooled), ``text_encoder_2`` is the T5 sequence
+    encoder, ``tokenizer_2`` is the T5 tokenizer, and ``noise_scheduler`` is unused
+    (flow matching needs no DDPM scheduler — see train_lora.flux_flow_match_loss).
+    """
 
     tokenizer: CLIPTokenizer
     text_encoder: CLIPTextModel
     vae: AutoencoderKL
-    unet: UNet2DConditionModel
-    noise_scheduler: DDPMScheduler
+    unet: Any  # UNet2DConditionModel (sd15/sdxl) or FluxTransformer2DModel (flux)
+    noise_scheduler: DDPMScheduler | None
     base_kind: str = "sd15"
     tokenizer_2: CLIPTokenizer | None = None
-    text_encoder_2: CLIPTextModelWithProjection | None = None
+    text_encoder_2: Any | None = None  # CLIPTextModelWithProjection (sdxl) | T5EncoderModel (flux)
+
+
+def _load_flux_components(base_model: str, device: torch.device, dtype: torch.dtype) -> TrainComponents:
+    """Load FLUX.1 parts (transformer/VAE/CLIP/T5); freeze all base weights.
+
+    Mirrors the component set in diffusers' train_dreambooth_lora_flux.py: a CLIP
+    text encoder (pooled, dim 768), a T5 sequence encoder (dim 4096), the 16-channel
+    AutoencoderKL (uses both shift_factor and scaling_factor), and the rectified-flow
+    FluxTransformer2DModel. No DDPM scheduler — flow matching is scheduler-free here.
+    """
+    from diffusers import FluxTransformer2DModel
+    from transformers import AutoTokenizer, T5EncoderModel
+
+    tokenizer = CLIPTokenizer.from_pretrained(base_model, subfolder="tokenizer")
+    # The flux tokenizer_2 subfolder is a T5TokenizerFast; AutoTokenizer resolves it
+    # from the saved tokenizer config (robust across transformers 4.x/5.x, where the
+    # explicit T5TokenizerFast symbol is an alias not present in all type stubs).
+    tokenizer_2 = AutoTokenizer.from_pretrained(base_model, subfolder="tokenizer_2")
+    text_encoder = CLIPTextModel.from_pretrained(base_model, subfolder="text_encoder")
+    text_encoder_2 = T5EncoderModel.from_pretrained(base_model, subfolder="text_encoder_2")
+    vae = AutoencoderKL.from_pretrained(base_model, subfolder="vae")
+    transformer = FluxTransformer2DModel.from_pretrained(base_model, subfolder="transformer")
+
+    for module in (vae, transformer, text_encoder, text_encoder_2):
+        module.requires_grad_(False)
+    vae.to(device, dtype=dtype).eval()
+    transformer.to(device, dtype=dtype)
+    text_encoder.to(device, dtype=dtype).eval()
+    text_encoder_2.to(device, dtype=dtype).eval()
+
+    return TrainComponents(
+        tokenizer=tokenizer,
+        text_encoder=text_encoder,
+        vae=vae,
+        unet=transformer,
+        noise_scheduler=None,
+        base_kind="flux",
+        tokenizer_2=tokenizer_2,
+        text_encoder_2=text_encoder_2,
+    )
 
 
 def load_train_components(
     base_model: str, device: torch.device, *, base_kind: str = "sd15", dtype: torch.dtype = torch.float32
 ) -> TrainComponents:
-    """Load tokenizer/text-encoder(s)/VAE/UNet/scheduler; freeze all base weights."""
+    """Load tokenizer/text-encoder(s)/VAE/denoiser/scheduler; freeze all base weights."""
+    if base_kind == "flux":
+        return _load_flux_components(base_model, device, dtype)
+
     tokenizer = CLIPTokenizer.from_pretrained(base_model, subfolder="tokenizer")
     text_encoder = CLIPTextModel.from_pretrained(base_model, subfolder="text_encoder")
     vae = AutoencoderKL.from_pretrained(base_model, subfolder="vae")
@@ -79,11 +136,30 @@ def load_train_components(
 
 
 def attach_lora(comp: TrainComponents, cfg: BufoLoRAConfig) -> list[torch.nn.Module]:
-    """Attach LoRA to the UNet (always) and text encoder(s) (if requested).
+    """Attach LoRA to the denoiser (always) and text encoder(s) (sd15/sdxl, if requested).
 
     Returns the list of modules with trainable params (for the optimizer + grad
     clip). Adapter params are forced to fp32 even when the base is lower precision.
+
+    For flux the denoiser is the FluxTransformer2DModel and we adapt its attention
+    projections (cfg.flux_target_modules); both text encoders stay frozen, matching
+    diffusers' train_dreambooth_lora_flux.py default (no --train_text_encoder there).
     """
+    if comp.base_kind == "flux":
+        transformer_lora = LoraConfig(
+            r=cfg.rank,
+            lora_alpha=cfg.alpha,
+            lora_dropout=cfg.dropout,
+            target_modules=cfg.flux_target_modules,
+            init_lora_weights="gaussian",
+        )
+        comp.unet.add_adapter(transformer_lora)
+        trained_flux: list[torch.nn.Module] = [comp.unet]
+        for param in comp.unet.parameters():
+            if param.requires_grad:
+                param.data = param.data.float()
+        return trained_flux
+
     unet_lora = LoraConfig(
         r=cfg.rank,
         lora_alpha=cfg.alpha,
@@ -121,9 +197,18 @@ def _adapter_state(module: torch.nn.Module) -> dict | None:
 
 
 def save_lora(comp: TrainComponents, out_dir: Path) -> None:
-    """Write ``pytorch_lora_weights.safetensors`` (UNet + any text-encoder layers)."""
+    """Write ``pytorch_lora_weights.safetensors`` (denoiser + any text-encoder layers)."""
     out_dir.mkdir(parents=True, exist_ok=True)
     unet_layers = _adapter_state(comp.unet)
+    if comp.base_kind == "flux":
+        from diffusers import FluxPipeline
+
+        FluxPipeline.save_lora_weights(
+            str(out_dir),
+            transformer_lora_layers=unet_layers,
+            safe_serialization=True,
+        )
+        return
     if comp.base_kind == "sdxl":
         StableDiffusionXLPipeline.save_lora_weights(
             str(out_dir),
@@ -200,11 +285,33 @@ def load_training_state(
 def encode_conditioning(
     comp: TrainComponents, batch: dict, *, resolution: int, device: torch.device, dtype: torch.dtype
 ) -> dict:
-    """UNet conditioning kwargs for one batch (model-kind aware).
+    """Denoiser conditioning kwargs for one batch (model-kind aware).
 
     Not wrapped in ``no_grad`` so text-encoder LoRA gradients can flow; a frozen
     encoder simply produces no graph.
+
+    For flux returns the raw flow-matching conditioning (not transformer kwargs):
+    ``pooled_projections`` (CLIP pooler_output, dim 768), ``encoder_hidden_states``
+    (T5 last_hidden_state, dim 4096), and ``txt_ids`` (zeros [seq, 3]). The flux
+    train path assembles the transformer call. Mirrors _encode_prompt_with_clip /
+    _encode_prompt_with_t5 / encode_prompt in train_dreambooth_lora_flux.py.
     """
+    if comp.base_kind == "flux":
+        # CLIP -> pooled (no sequence used by flux). pooler_output: [B, 768].
+        pooled = comp.text_encoder(batch["input_ids"].to(device), output_hidden_states=False).pooler_output
+        # T5 -> sequence embeds. last_hidden_state: [B, seq, 4096].
+        prompt_embeds = comp.text_encoder_2(batch["input_ids_2"].to(device), output_hidden_states=False)[0]
+        prompt_embeds = prompt_embeds.to(dtype=dtype)
+        pooled = pooled.to(dtype=dtype)
+        # text_ids: positional ids for the text stream, all zeros (single image, no
+        # T5 RoPE offset). Shape [seq, 3]; shared across the batch.
+        text_ids = torch.zeros(prompt_embeds.shape[1], 3, device=device, dtype=dtype)
+        return {
+            "pooled_projections": pooled,
+            "encoder_hidden_states": prompt_embeds,
+            "txt_ids": text_ids,
+        }
+
     if comp.base_kind == "sd15":
         return {"encoder_hidden_states": comp.text_encoder(batch["input_ids"].to(device))[0]}
 
@@ -233,8 +340,19 @@ def load_inference_pipeline(
     *,
     base_kind: str = "sd15",
     dtype: torch.dtype = torch.float32,
-) -> StableDiffusionPipeline | StableDiffusionXLPipeline:
-    """Build an SD/SDXL pipeline (safety checker disabled for SD1.5) + optional LoRA."""
+) -> Any:
+    """Build an SD/SDXL/FLUX pipeline (safety checker disabled for SD1.5) + optional LoRA."""
+    if base_kind == "flux":
+        from diffusers import FluxPipeline
+
+        # Flux only fits/performs in bf16; never load it in the fp32 default for inference.
+        flux_dtype = torch.bfloat16 if dtype == torch.float32 else dtype
+        flux_pipe = FluxPipeline.from_pretrained(base_model, torch_dtype=flux_dtype)
+        flux_pipe.to(device)
+        if lora_dir is not None:
+            # FluxPipeline.load_lora_weights routes transformer_lora_layers into the transformer.
+            flux_pipe.load_lora_weights(str(lora_dir))
+        return flux_pipe
     if base_kind == "sdxl":
         pipe: StableDiffusionPipeline | StableDiffusionXLPipeline = StableDiffusionXLPipeline.from_pretrained(
             base_model, torch_dtype=dtype

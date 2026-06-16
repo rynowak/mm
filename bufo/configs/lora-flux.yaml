@@ -1,0 +1,61 @@
+# Bufo FLUX.1-dev LoRA: rectified-flow fine-tune of the transformer attention
+# projections. Highest-fidelity base here, but memory-heavy — designed for an
+# A100 80GB, NOT for local MPS (the transformer alone is ~12B params / ~24GB bf16).
+#
+# Memory fit on A100 80GB @ 1024px:
+#   - bf16 base weights (transformer + T5 + CLIP + VAE) ~= 33GB resident.
+#   - amp: true + transformer.enable_gradient_checkpointing() (flux_gradient_checkpointing)
+#     keeps activation memory bounded; batch_size 1 + grad_accum 4 gives an effective
+#     batch of 4 without growing peak memory.
+#   - If still tight, pre-cache the (frozen) CLIP+T5 text embeddings to disk so the
+#     T5 encoder (~4.7B params) need not stay resident during the step — see the
+#     flux_max_sequence_length note below. (Text-embed caching is a future hook;
+#     gradient checkpointing alone fits 1024px in our measurements' ballpark.)
+data:
+  resolution: 1024          # flux native; memory-heavy (see header)
+  random_flip: true
+
+lora:
+  rank: 16
+  alpha: 16
+  dropout: 0.0
+  # FluxTransformer2DModel attention projections (single + double stream blocks).
+  flux_target_modules:
+    - "to_q"
+    - "to_k"
+    - "to_v"
+    - "to_out.0"
+    - "add_q_proj"
+    - "add_k_proj"
+    - "add_v_proj"
+    - "to_add_out"
+  # Flux keeps both text encoders frozen (no text-encoder LoRA).
+  train_text_encoder: false
+
+training:
+  seed: 42
+  base_kind: flux
+  base_model: black-forest-labs/FLUX.1-dev
+  batch_size: 1
+  grad_accum: 4             # effective batch = 4
+  learning_rate: 1.0e-4     # standard flux LoRA LR
+  weight_decay: 1.0e-2
+  warmup_steps: 50
+  max_steps: 1000
+  grad_clip: 1.0
+  amp: true                 # bf16 autocast on CUDA (fp32 eager off-CUDA)
+  # Flux flow-matching knobs (mirror train_dreambooth_lora_flux.py):
+  flux_logit_mean: 0.0
+  flux_logit_std: 1.0
+  flux_weighting_scheme: none   # SD3 loss weighting hook; start uniform
+  flux_guidance: 1.0            # embedded distilled guidance for FLUX.1-dev (training)
+  flux_max_sequence_length: 512 # T5 token budget (256 fits more easily)
+  flux_gradient_checkpointing: true  # transformer.enable_gradient_checkpointing() to fit 1024px on A100 80GB
+  snapshot_interval: 250
+  checkpoint_interval: 250
+  num_workers: 0
+  snapshot_prompts:
+    - "bufo riding a skateboard, flat cartoon frog emoji sticker, bold simple shapes, white background"
+    - "bufo as a ninja, flat cartoon frog emoji sticker, bold simple shapes, white background"
+    - "bufo drinking coffee, flat cartoon frog emoji sticker, bold simple shapes, white background"
+    - "bufo crying, flat cartoon frog emoji sticker, bold simple shapes, white background"

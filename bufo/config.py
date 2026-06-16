@@ -30,15 +30,30 @@ class LoRAConfig(BaseModel):
     alpha: int = 16  # scaling = alpha / rank
     dropout: float = 0.0
     # SD UNet cross/self-attention projection names (peft matches by suffix).
+    # For flux, set these to the FluxTransformer2DModel attention projections
+    # (see flux_target_modules below for the canonical set).
     target_modules: list[str] = ["to_q", "to_k", "to_v", "to_out.0"]
     # Also adapt the CLIP text encoder(s) — the biggest prompt-adherence lever.
+    # (sd15/sdxl only; flux leaves both text encoders frozen.)
     train_text_encoder: bool = False
     text_target_modules: list[str] = ["q_proj", "k_proj", "v_proj", "out_proj"]
+    # FluxTransformer2DModel attention projections (single + double stream blocks).
+    # Used by attach_lora when base_kind == "flux"; overridable per-config.
+    flux_target_modules: list[str] = [
+        "to_q",
+        "to_k",
+        "to_v",
+        "to_out.0",
+        "add_q_proj",
+        "add_k_proj",
+        "add_v_proj",
+        "to_add_out",
+    ]
 
 
 class TrainingConfig(BaseModel):
     seed: int = 42
-    base_kind: Literal["sd15", "sdxl"] = "sd15"
+    base_kind: Literal["sd15", "sdxl", "flux"] = "sd15"
     base_model: str = "stable-diffusion-v1-5/stable-diffusion-v1-5"
     batch_size: int = 1
     grad_accum: int = 4  # effective batch = batch_size * grad_accum
@@ -47,7 +62,15 @@ class TrainingConfig(BaseModel):
     warmup_steps: int = 50
     max_steps: int = 1500
     grad_clip: float = 1.0
-    min_snr_gamma: float = 0.0  # >0 enables min-SNR loss weighting (5.0 is typical)
+    min_snr_gamma: float = 0.0  # >0 enables min-SNR loss weighting (5.0 is typical, sd15/sdxl only)
+    # Flux flow-matching knobs (ignored for sd15/sdxl). The logit-normal timestep
+    # sampler + guidance mirror diffusers' train_dreambooth_lora_flux.py.
+    flux_logit_mean: float = 0.0  # compute_density_for_timestep_sampling(logit_mean=)
+    flux_logit_std: float = 1.0  # compute_density_for_timestep_sampling(logit_std=)
+    flux_weighting_scheme: str = "none"  # SD3 loss weighting hook: none|sigma_sqrt|cosmap|logit_normal
+    flux_guidance: float = 1.0  # embedded guidance for FLUX.1-dev (guidance-distilled); ignored for schnell
+    flux_max_sequence_length: int = 512  # T5 token budget (256 fits more easily; 512 = dev default)
+    flux_gradient_checkpointing: bool = True  # enable transformer.enable_gradient_checkpointing() to fit 1024px
     # bf16 autocast is CUDA-gated (fp32 eager on MPS/CPU for stability), mirroring
     # the wordle samples.
     amp: bool = True

@@ -31,6 +31,16 @@ class _StubTokenizer:
         return SimpleNamespace(input_ids=torch.zeros((1, max_length), dtype=torch.long))
 
 
+class _StubT5Tokenizer:
+    """T5TokenizerFast stand-in with a huge default model_max_length, so the dataset
+    must pass an explicit max_length for flux (not rely on the tokenizer default)."""
+
+    model_max_length = 1_000_000
+
+    def __call__(self, text: str, *, padding=None, truncation=None, max_length: int = 256, return_tensors=None):
+        return SimpleNamespace(input_ids=torch.zeros((1, max_length), dtype=torch.long))
+
+
 def test_filename_phrase_strips_trigger():
     assert filename_phrase("bufo-offers-cash-money.png") == "offers cash money"
     assert filename_phrase("awesomebufo") == "awesome"
@@ -76,6 +86,31 @@ def test_dataset_serves_normalized_pairs(tmp_path):
     assert item["pixel_values"].min() >= -1.0
     assert item["pixel_values"].max() <= 1.0
     assert item["input_ids"].shape == (16,)
+
+
+def test_dataset_sdxl_second_clip_at_77(tmp_path):
+    # sdxl: both tokenizers at their CLIP model_max_length (16 here).
+    _build_dataset(tmp_path, 2)
+    ds = BufoDataset(tmp_path, _StubTokenizer(), tokenizer_2=_StubTokenizer(), resolution=16, base_kind="sdxl")
+    item = ds[0]
+    assert item["input_ids"].shape == (16,)
+    assert item["input_ids_2"].shape == (16,)  # second CLIP, not the T5 budget
+
+
+def test_dataset_flux_t5_uses_explicit_max_length(tmp_path):
+    # flux: CLIP at 16, T5 at the configured budget (256), NOT the tokenizer's huge default.
+    _build_dataset(tmp_path, 2)
+    ds = BufoDataset(
+        tmp_path,
+        _StubTokenizer(),
+        tokenizer_2=_StubT5Tokenizer(),
+        resolution=16,
+        base_kind="flux",
+        tokenizer_2_max_length=256,
+    )
+    item = ds[0]
+    assert item["input_ids"].shape == (16,)  # CLIP (77 in practice)
+    assert item["input_ids_2"].shape == (256,)  # T5 budget, bounded by the dataset
 
 
 def test_dataset_requires_prepared_metadata(tmp_path):
