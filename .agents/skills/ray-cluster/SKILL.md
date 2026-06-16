@@ -113,6 +113,28 @@ Notes from real runs: `tensorboard` **must** be in the pip list (importing
 and are reused. Verified: a 600-step SDXL+TE-LoRA run is **~27 min** and a 24-prompt
 eval **~3-5 min** on the A100 (vs hours / ~40 min on MPS).
 
+## Custom image (the drift-killer)
+
+The repeated cluster failures all came from **local (py3.12) ≠ cluster base image
+(py3.9)**. The definitive fix is a custom image that *is* our stack, so jobs run the
+exact environment we develop against. `docker/Dockerfile` + `docker/build-and-push.sh`:
+
+- **Base** `rayproject/ray:2.40.0-py312-gpu` (Ray 2.40 to match the control plane, but
+  **py3.12**) + our pinned deps (`torch 2.4.1+cu121`, diffusers/transformers/peft/…).
+- **Deps baked, code shipped per-job** (`--working-dir` + PYTHONPATH) → image stable
+  across code changes; rebuild only when deps change. A `RUN python -c "import …"` line
+  fails the build if deps conflict (catches it locally, not on the cluster).
+
+```bash
+REG=<registry> ./docker/build-and-push.sh          # cross-builds linux/amd64 + pushes
+REG=local NO_PUSH=1 ./docker/build-and-push.sh     # local build + import smoke only
+```
+
+Two open infra questions for the cluster owner: **(1)** the registry to push to (ACR
+name + `az acr login`), and **(2)** how a job consumes a custom image — per-job
+`runtime_env {"container": {"image": …}}` (if enabled), or a RayCluster/worker-group
+deployed with it. Once it's the job runtime, the py3.9 trap list above no longer applies.
+
 ## Monitoring
 
 - **CLI:** `uvx --from "ray[default]==2.40.0" ray job logs <id> --address "$ADDR" --follow`;
