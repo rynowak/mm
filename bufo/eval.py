@@ -14,7 +14,7 @@ import argparse
 import dataclasses
 import json
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
@@ -211,7 +211,7 @@ def _mean(xs) -> float:
 
 
 def _default_out_dir() -> Path:
-    ts = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
     return Path("runs/bufo-eval") / ts
 
 

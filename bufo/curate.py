@@ -53,7 +53,7 @@ def average_hash(img: Image.Image, size: int = 8) -> int:
 
 
 def _hamming(a: int, b: int) -> int:
-    return (a ^ b).bit_count()
+    return bin(a ^ b).count("1")  # int.bit_count() is py3.11+; this is py3.9-safe (cluster runs 3.9)
 
 
 def alpha_coverage(img: Image.Image) -> float:

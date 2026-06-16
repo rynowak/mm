@@ -58,6 +58,9 @@ line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "TCH"]
+# UP017 rewrites timezone.utc -> datetime.UTC (py3.11+), but the Ray cluster runs
+# py3.9; keep the portable timezone.utc form.
+ignore = ["UP017"]
 
 [tool.pytest.ini_options]
 testpaths = ["libs", "wordle/tests", "wordle2/tests", "wordle3/tests", "bufo/tests"]

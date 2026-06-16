@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pathlib
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from torch.utils.tensorboard import SummaryWriter
@@ -20,7 +20,7 @@ class MetricsLogger:
 
     def __init__(self, experiment: str, run_dir: pathlib.Path | None = None) -> None:
         if run_dir is None:
-            timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
             run_dir = pathlib.Path("runs") / experiment / timestamp
 
         self._log_dir = run_dir
