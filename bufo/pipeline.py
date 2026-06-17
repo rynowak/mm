@@ -355,12 +355,30 @@ def load_inference_pipeline(
 ) -> Any:
     """Build an SD/SDXL/FLUX pipeline (safety checker disabled for SD1.5) + optional LoRA."""
     if base_kind == "flux":
-        from diffusers import FluxPipeline
+        from diffusers import AutoencoderKL, FluxPipeline, FluxTransformer2DModel
+        from transformers import CLIPTextModel, T5EncoderModel
 
-        # Flux only fits/performs in bf16; never load it in the fp32 default for inference.
+        # Flux only fits/performs in bf16. The GPU worker pod caps host RAM at ~12GB,
+        # so (as in _load_flux_components) stream the big models straight to the GPU via
+        # device_map and assemble the pipeline from pre-loaded components — never let
+        # FluxPipeline.from_pretrained materialize the 12B transformer on the host.
         flux_dtype = torch.bfloat16 if dtype == torch.float32 else dtype
-        flux_pipe = FluxPipeline.from_pretrained(base_model, torch_dtype=flux_dtype)
-        flux_pipe.to(device)
+        dt = 0 if device.type == "cuda" else str(device)
+        stream = {"torch_dtype": flux_dtype, "device_map": {"": dt}}
+        transformer = FluxTransformer2DModel.from_pretrained(base_model, subfolder="transformer", **stream)
+        text_encoder_2 = T5EncoderModel.from_pretrained(base_model, subfolder="text_encoder_2", **stream)
+        vae = AutoencoderKL.from_pretrained(base_model, subfolder="vae", torch_dtype=flux_dtype).to(device)
+        text_encoder = CLIPTextModel.from_pretrained(base_model, subfolder="text_encoder", torch_dtype=flux_dtype).to(
+            device
+        )
+        flux_pipe = FluxPipeline.from_pretrained(
+            base_model,
+            transformer=transformer,
+            text_encoder_2=text_encoder_2,
+            vae=vae,
+            text_encoder=text_encoder,
+            torch_dtype=flux_dtype,
+        )
         if lora_dir is not None:
             # FluxPipeline.load_lora_weights routes transformer_lora_layers into the transformer.
             flux_pipe.load_lora_weights(str(lora_dir))
