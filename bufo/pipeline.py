@@ -77,22 +77,34 @@ def _load_flux_components(base_model: str, device: torch.device, dtype: torch.dt
     from diffusers import FluxTransformer2DModel
     from transformers import AutoTokenizer, T5EncoderModel
 
+    # Host RAM on the GPU worker pod is capped (~12GB). Loading the 12B transformer /
+    # 4.7B T5 in fp32 on CPU (the default) OOM-kills the worker, so the big models are
+    # loaded in `dtype` (bf16) and STREAMED straight to the GPU via device_map (host
+    # never holds the full fp32 copy) — the same pattern the Qwen judge loader uses.
+    # device_map={"": device} pins everything to one GPU (no offload hooks → trainable).
+    # safetensors needs an *indexed* device ("cuda:0"); a bare torch.device("cuda")
+    # is rejected ("device cuda is invalid"), so pass the GPU index for device_map.
+    dev_target = 0 if device.type == "cuda" else str(device)
+    big = {"torch_dtype": dtype, "device_map": {"": dev_target}}
+
     tokenizer = CLIPTokenizer.from_pretrained(base_model, subfolder="tokenizer")
     # The flux tokenizer_2 subfolder is a T5TokenizerFast; AutoTokenizer resolves it
     # from the saved tokenizer config (robust across transformers 4.x/5.x, where the
     # explicit T5TokenizerFast symbol is an alias not present in all type stubs).
     tokenizer_2 = AutoTokenizer.from_pretrained(base_model, subfolder="tokenizer_2")
-    text_encoder = CLIPTextModel.from_pretrained(base_model, subfolder="text_encoder")
-    text_encoder_2 = T5EncoderModel.from_pretrained(base_model, subfolder="text_encoder_2")
-    vae = AutoencoderKL.from_pretrained(base_model, subfolder="vae")
-    transformer = FluxTransformer2DModel.from_pretrained(base_model, subfolder="transformer")
+    # CLIP + VAE are small enough to load to host then move; the big two stream to GPU.
+    text_encoder = CLIPTextModel.from_pretrained(base_model, subfolder="text_encoder", torch_dtype=dtype)
+    vae = AutoencoderKL.from_pretrained(base_model, subfolder="vae", torch_dtype=dtype)
+    text_encoder_2 = T5EncoderModel.from_pretrained(base_model, subfolder="text_encoder_2", **big)
+    transformer = FluxTransformer2DModel.from_pretrained(base_model, subfolder="transformer", **big)
 
     for module in (vae, transformer, text_encoder, text_encoder_2):
         module.requires_grad_(False)
-    vae.to(device, dtype=dtype).eval()
-    transformer.to(device, dtype=dtype)
-    text_encoder.to(device, dtype=dtype).eval()
-    text_encoder_2.to(device, dtype=dtype).eval()
+    vae.to(device).eval()
+    text_encoder.to(device).eval()
+    # transformer + text_encoder_2 are already on-device via device_map; don't .to() them
+    # (accelerate-loaded models reject .to). They're frozen; the LoRA adapters add later.
+    text_encoder_2.eval()
 
     return TrainComponents(
         tokenizer=tokenizer,

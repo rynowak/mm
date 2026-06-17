@@ -166,8 +166,6 @@ def flux_flow_match_loss(comp: TrainComponents, batch: dict, cfg: object, device
     The transformer is fed the 2x2-packed latents + latent_image_ids; text comes in
     as pooled CLIP (pooled_projections) + T5 sequence (encoder_hidden_states) + txt_ids.
     """
-    from diffusers import FluxPipeline
-
     vae = comp.vae
     transformer = comp.unet
     shift_factor = vae.config.shift_factor
@@ -213,17 +211,12 @@ def flux_flow_match_loss(comp: TrainComponents, batch: dict, cfg: object, device
             img_ids=latent_image_ids,
             return_dict=False,
         )[0]
-        # _unpack_latents back to [B, C, H, W] so it aligns with target.
-        vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
-        model_pred = FluxPipeline._unpack_latents(
-            model_pred,
-            height=lat_h * vae_scale_factor,
-            width=lat_w * vae_scale_factor,
-            vae_scale_factor=vae_scale_factor,
-        )
+        # model_pred is in PACKED layout [B, seq, C*4]. Compare in packed space by
+        # packing the velocity target the same way (avoids diffusers' version-specific
+        # _unpack_latents convention; MSE is invariant to the shared packing permutation).
         # flow-matching target = velocity = noise - latents (== z1 - x).
-        target = noise - latents
-        weighting = _sd3_loss_weighting(cfg.flux_weighting_scheme, sigma)
+        target = _pack_latents(noise - latents)
+        weighting = _sd3_loss_weighting(cfg.flux_weighting_scheme, t).view(bsz, 1, 1)
         loss = torch.mean(
             (weighting.float() * (model_pred.float() - target.float()) ** 2).reshape(bsz, -1), dim=1
         ).mean()
