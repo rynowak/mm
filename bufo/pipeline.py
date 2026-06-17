@@ -85,23 +85,26 @@ def _load_flux_components(base_model: str, device: torch.device, dtype: torch.dt
     # safetensors needs an *indexed* device ("cuda:0"); a bare torch.device("cuda")
     # is rejected ("device cuda is invalid"), so pass the GPU index for device_map.
     dev_target = 0 if device.type == "cuda" else str(device)
-    big = {"torch_dtype": dtype, "device_map": {"": dev_target}}
+    big = {"torch_dtype": dtype, "device_map": {"": dev_target}, "low_cpu_mem_usage": True}
 
     tokenizer = CLIPTokenizer.from_pretrained(base_model, subfolder="tokenizer")
     # The flux tokenizer_2 subfolder is a T5TokenizerFast; AutoTokenizer resolves it
     # from the saved tokenizer config (robust across transformers 4.x/5.x, where the
     # explicit T5TokenizerFast symbol is an alias not present in all type stubs).
     tokenizer_2 = AutoTokenizer.from_pretrained(base_model, subfolder="tokenizer_2")
-    # CLIP + VAE are small enough to load to host then move; the big two stream to GPU.
-    text_encoder = CLIPTextModel.from_pretrained(base_model, subfolder="text_encoder", torch_dtype=dtype)
-    vae = AutoencoderKL.from_pretrained(base_model, subfolder="vae", torch_dtype=dtype)
+    # Move CLIP + VAE to the GPU *immediately* so host RAM is clear before the big
+    # device_map streams. The pod's ~12GB host cap is tight enough that Flux barely
+    # fits; leaving even ~0.5GB of encoders resident on host during the transformer
+    # stream is enough to OOM the worker.
+    text_encoder = CLIPTextModel.from_pretrained(base_model, subfolder="text_encoder", torch_dtype=dtype).to(device)
+    vae = AutoencoderKL.from_pretrained(base_model, subfolder="vae", torch_dtype=dtype).to(device)
     text_encoder_2 = T5EncoderModel.from_pretrained(base_model, subfolder="text_encoder_2", **big)
     transformer = FluxTransformer2DModel.from_pretrained(base_model, subfolder="transformer", **big)
 
     for module in (vae, transformer, text_encoder, text_encoder_2):
         module.requires_grad_(False)
-    vae.to(device).eval()
-    text_encoder.to(device).eval()
+    vae.eval()
+    text_encoder.eval()
     # transformer + text_encoder_2 are already on-device via device_map; don't .to() them
     # (accelerate-loaded models reject .to). They're frozen; the LoRA adapters add later.
     text_encoder_2.eval()
@@ -355,32 +358,26 @@ def load_inference_pipeline(
 ) -> Any:
     """Build an SD/SDXL/FLUX pipeline (safety checker disabled for SD1.5) + optional LoRA."""
     if base_kind == "flux":
-        from diffusers import AutoencoderKL, FluxPipeline, FluxTransformer2DModel
-        from transformers import CLIPTextModel, T5EncoderModel
+        from diffusers import FlowMatchEulerDiscreteScheduler, FluxPipeline
 
-        # Flux only fits/performs in bf16. The GPU worker pod caps host RAM at ~12GB,
-        # so (as in _load_flux_components) stream the big models straight to the GPU via
-        # device_map and assemble the pipeline from pre-loaded components — never let
-        # FluxPipeline.from_pretrained materialize the 12B transformer on the host.
+        # The GPU worker pod caps host RAM at ~12GB. FluxPipeline.from_pretrained
+        # re-materializes the 12B transformer on the host and OOM-kills the worker, so
+        # reuse the proven streaming loader (_load_flux_components: device_map → GPU) and
+        # assemble the pipeline from those live components via the CONSTRUCTOR — exactly
+        # what build_live_pipe does for the in-training snapshots (which work).
         flux_dtype = torch.bfloat16 if dtype == torch.float32 else dtype
-        dt = 0 if device.type == "cuda" else str(device)
-        stream = {"torch_dtype": flux_dtype, "device_map": {"": dt}}
-        transformer = FluxTransformer2DModel.from_pretrained(base_model, subfolder="transformer", **stream)
-        text_encoder_2 = T5EncoderModel.from_pretrained(base_model, subfolder="text_encoder_2", **stream)
-        vae = AutoencoderKL.from_pretrained(base_model, subfolder="vae", torch_dtype=flux_dtype).to(device)
-        text_encoder = CLIPTextModel.from_pretrained(base_model, subfolder="text_encoder", torch_dtype=flux_dtype).to(
-            device
-        )
-        flux_pipe = FluxPipeline.from_pretrained(
-            base_model,
-            transformer=transformer,
-            text_encoder_2=text_encoder_2,
-            vae=vae,
-            text_encoder=text_encoder,
-            torch_dtype=flux_dtype,
+        comp = _load_flux_components(base_model, device, flux_dtype)
+        flux_pipe = FluxPipeline(
+            vae=comp.vae,
+            text_encoder=comp.text_encoder,
+            text_encoder_2=comp.text_encoder_2,
+            tokenizer=comp.tokenizer,
+            tokenizer_2=comp.tokenizer_2,
+            transformer=comp.unet,
+            scheduler=FlowMatchEulerDiscreteScheduler(),
         )
         if lora_dir is not None:
-            # FluxPipeline.load_lora_weights routes transformer_lora_layers into the transformer.
+            # load_lora_weights routes transformer_lora_layers into the transformer (tiny, 26M).
             flux_pipe.load_lora_weights(str(lora_dir))
         return flux_pipe
     if base_kind == "sdxl":
