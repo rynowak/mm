@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import inspect
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -93,13 +94,12 @@ def generate_eval_images(
         row: list[Image.Image] = []
         for n in range(images_per_prompt):
             gen = torch.Generator(device="cpu").manual_seed(seed + pi * 1000 + n)
-            img = pipe(
-                prompt,
-                negative_prompt=negative_prompt or None,
-                num_inference_steps=steps,
-                guidance_scale=guidance,
-                generator=gen,
-            ).images[0]
+            kwargs = {"num_inference_steps": steps, "guidance_scale": guidance, "generator": gen}
+            # FluxPipeline (guidance-distilled) has no `negative_prompt` arg; only pass it to
+            # pipelines that accept it (sd15/sdxl), and only when non-empty.
+            if negative_prompt and "negative_prompt" in inspect.signature(pipe.__call__).parameters:
+                kwargs["negative_prompt"] = negative_prompt
+            img = pipe(prompt, **kwargs).images[0]
             row.append(img)
         grids.append(row)
     return grids
