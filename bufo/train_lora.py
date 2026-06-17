@@ -230,6 +230,8 @@ def build_live_pipe(comp: TrainComponents) -> object:
     if comp.base_kind == "flux":
         from diffusers import FlowMatchEulerDiscreteScheduler, FluxPipeline
 
+        from bufo.pipeline import FLUX_DEFAULT_BASE
+
         flux_pipe = FluxPipeline(
             vae=comp.vae,
             text_encoder=comp.text_encoder,
@@ -237,7 +239,9 @@ def build_live_pipe(comp: TrainComponents) -> object:
             tokenizer=comp.tokenizer,
             tokenizer_2=comp.tokenizer_2,
             transformer=comp.unet,
-            scheduler=FlowMatchEulerDiscreteScheduler(),
+            # Flux's own scheduler config (shift + dynamic shifting); a bare
+            # FlowMatchEulerDiscreteScheduler() under-denoises and yields blurry frogs.
+            scheduler=FlowMatchEulerDiscreteScheduler.from_pretrained(FLUX_DEFAULT_BASE, subfolder="scheduler"),
         )
         flux_pipe.set_progress_bar_config(disable=True)
         return flux_pipe

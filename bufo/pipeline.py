@@ -374,7 +374,9 @@ def load_inference_pipeline(
             tokenizer=comp.tokenizer,
             tokenizer_2=comp.tokenizer_2,
             transformer=comp.unet,
-            scheduler=FlowMatchEulerDiscreteScheduler(),
+            # Flux's OWN scheduler config (shift + use_dynamic_shifting) — a bare
+            # FlowMatchEulerDiscreteScheduler() has no shift and under-denoises → blurry.
+            scheduler=FlowMatchEulerDiscreteScheduler.from_pretrained(base_model, subfolder="scheduler"),
         )
         if lora_dir is not None:
             # load_lora_weights routes transformer_lora_layers into the transformer (tiny, 26M).
