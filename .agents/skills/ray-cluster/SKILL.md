@@ -17,15 +17,20 @@ off-VPN every URL times out (HTTP 000).
 
 ## Clusters
 
-| Cluster | GPU | Use | Ray Jobs API (`:8265`) |
-|---|---|---|---|
-| **swedencentral** | A100 80GB | **experiments (default)** | http://ray-picasso-dash-swc.swedencentral.cloudapp.azure.com:8265 |
-| **westus3** | H100 | production — coordinate first | http://ray-picasso-dash.westus3.cloudapp.azure.com:8265 |
+| Cluster | GPU | Region tag | Use | Ray Jobs API (`:8265`) |
+|---|---|---|---|---|
+| **swedencentral** | A100 80GB | `-swc` | **experiments (default)** | http://ray-picasso-dash-swc.swedencentral.cloudapp.azure.com:8265 |
+| **westus3** | H100 | *(none)* | production — coordinate first | http://ray-picasso-dash.westus3.cloudapp.azure.com:8265 |
+| **canadacentral** | GPU TBD | `-cac` | newest (added 2026-06-17); has the 64Gi mem fix | http://ray-picasso-dash-cac.canadacentral.cloudapp.azure.com:8265 |
 
-- MLflow: `http://ray-picasso-mlflow-swc.swedencentral.cloudapp.azure.com` (westus3: drop `-swc`)
+Per-cluster MLflow / Grafana follow the same region tag (swedencentral shown; swap the tag):
+- MLflow: `http://ray-picasso-mlflow-swc.swedencentral.cloudapp.azure.com` (westus3: drop `-swc`; canadacentral: `-cac` + `canadacentral`)
 - Grafana: `http://ray-picasso-grafana-swc.swedencentral.cloudapp.azure.com`
+- canadacentral: dash `…-dash-cac.canadacentral…:8265`, MLflow `…-mlflow-cac.canadacentral…`, Grafana `…-grafana-cac.canadacentral…`
 
 Default to **swedencentral (A100)** for experiments; leave **westus3 (production)** alone unless told.
+Each site is fully independent (own NFS / ACR / MLflow), so data + the HF token must be
+staged per cluster (re-run `prepare`, stage `/mnt/ray/hf/token`) before using a new one.
 
 ## VPN access (required)
 
@@ -135,6 +140,29 @@ train + eval, and `make verify-cluster` keeps our code py3.9-clean — so the dr
 without a custom image. Reach for one only if per-job pip latency ever justifies the
 cross-repo coordination.
 
+## Experiment tracking (MLflow)
+
+Every pod has **`MLFLOW_TRACKING_URI=http://mlflow.ray-system.svc:5000` baked in**, so a
+job logs with almost no setup — just instrument it ("decorate your jobs for MLflow", per
+the cluster owner):
+
+```python
+import mlflow, os
+mlflow.set_experiment(os.environ.get("MLFLOW_EXPERIMENT_NAME", "bufo"))
+with mlflow.start_run():
+    mlflow.log_params({"base_kind": "flux", "lr": lr, "steps": steps})
+    mlflow.log_metric("loss", loss, step=step)   # call per interval
+```
+
+- Set **`MLFLOW_EXPERIMENT_NAME`** via `env_vars` so runs land in your experiment.
+- **Don't `pip install mlflow`** in runtime-env — the baked `mlflow-skinny` keeps protobuf
+  compatible with Ray 2.40; if your project lacks it, add `mlflow-skinny==2.22.0`.
+- Keep big checkpoints on `/mnt/ray`; log only small metrics/artifacts.
+- Browse runs at the per-cluster **MLflow corpnet URL** (region-tagged — see Clusters);
+  link a run directly, e.g. `…/#/experiments/<id>/runs/<run_id>/model-metrics`.
+- Ray Train jobs can instead attach `ray.air.integrations.mlflow.MLflowLoggerCallback`
+  when the URI is present (what raygun's `train/train.py` does).
+
 ## Monitoring
 
 - **CLI:** `uvx --from "ray[default]==2.40.0" ray job logs <id> --address "$ADDR" --follow`;
@@ -152,7 +180,14 @@ cross-repo coordination.
   concurrent runs, use both clusters (A100 sweden + H100 westus3).
 - **Don't override baked `torch`/`numpy`** (numpy pinned `<2`); needing different pins → custom image.
 - **`tensorboard` in the pip list** if you import `mm_training`.
-- **Persist to `/mnt/ray`** — node-local `runs/` vanishes on scale-down; symlink it (+ `HF_HOME`) to the NFS.
+- **Persist to `/mnt/ray` via an ABSOLUTE output path, not a symlink** — `train_lora --run-dir
+  /mnt/ray/bufo-runs/<name>` (and `--data-dir`, `HF_HOME=/mnt/ray/hf`). A `runs/ → /mnt/ray`
+  symlink silently dropped a whole Flux run onto the ephemeral pod fs (recovered only because
+  the pod was still warm — `shutil.copytree` from `/tmp/ray/*/working_dir_files/*/runs`).
+- **GPU pod host-RAM cap** — was **12 GiB** (OOM-kills big-model loads; FLUX.1-dev's 12B
+  transformer peaks ~11GB host while streaming to GPU). Raised to **64 GiB** via raygun PR #1
+  (rolled out per-site 2026-06-17). If a job dies with *"node running low on memory"* at ~12GB
+  on a 200GB+ VM, that's this cap — it's a cgroup limit, not real exhaustion.
 - **Python 3.9 base** — avoid 3.10+ runtime syntax: no `zip(..., strict=)` (3.10),
   `datetime.UTC` (3.11 → use `timezone.utc`), or `int.bit_count()` (3.10 → `bin(x).count("1")`).
   Or supply a custom py3.12 image.

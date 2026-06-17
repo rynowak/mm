@@ -11,3 +11,4 @@ runs/
 .ruff_cache/
 .claude/worktrees/
 .live/
+bufo/_fluxlora/
