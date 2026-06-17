@@ -407,8 +407,9 @@ def train(
     if run_dir is None:
         logger = MetricsLogger(experiment="bufo-lora")
         run_dir = logger.log_dir
-    elif resume:
-        logger = MetricsLogger(experiment="bufo-lora", run_dir=run_dir)  # keep logging in the same run
+    else:
+        # Explicit run_dir (e.g. an absolute NFS path, or a resume target): log into it.
+        logger = MetricsLogger(experiment="bufo-lora", run_dir=run_dir)
     print(f"Run dir: {run_dir}")
     RunManifest.capture(
         experiment="bufo-lora", config=config.model_dump(), seed=tcfg.seed, dataset_id="all-the-bufo"
@@ -501,6 +502,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=None, help="Override config max_steps (quick runs)")
     parser.add_argument("--resume", type=str, default=None, help="Resume from a checkpoint dir or training_state.pt")
     parser.add_argument("--eval-config", type=str, default=None, help="EvalConfig YAML for in-training CLIP eval")
+    parser.add_argument(
+        "--run-dir", type=str, default=None, help="Output dir for checkpoints/snapshots (use an absolute NFS path)"
+    )
     return parser.parse_args()
 
 
@@ -510,7 +514,8 @@ def main() -> None:
     if args.max_steps is not None:
         config.training.max_steps = args.max_steps
     eval_config = EvalConfig.from_yaml(args.eval_config) if args.eval_config else None
-    train(config, data_dir=args.data_dir, resume=args.resume, eval_config=eval_config)
+    run_dir = Path(args.run_dir) if args.run_dir else None
+    train(config, data_dir=args.data_dir, resume=args.resume, eval_config=eval_config, run_dir=run_dir)
 
 
 if __name__ == "__main__":
