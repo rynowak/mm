@@ -16,8 +16,8 @@ data:
   random_flip: true
 
 lora:
-  rank: 16
-  alpha: 16
+  rank: 32      # bumped 16->32 for more identity capacity (v1 lost the bufo look)
+  alpha: 32     # alpha==rank keeps effective scale at 1.0
   dropout: 0.0
   # FluxTransformer2DModel attention projections (single + double stream blocks).
   flux_target_modules:
