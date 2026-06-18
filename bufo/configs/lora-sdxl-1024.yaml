@@ -1,0 +1,38 @@
+# Bufo SDXL @ NATIVE 1024 — kills the "dozens of bufos" tiling + weird artifacts.
+# SDXL is a 1024-native model; training/sampling at 768 (an MPS speed compromise)
+# makes it duplicate the subject. On the A100 we train AND sample at 1024.
+# Also harder than v3: rank 64, attention + feed-forward LoRA, to bind bufo
+# identity more strongly (SDXL already reads as bufo — this sharpens it).
+data:
+  resolution: 1024
+  random_flip: true
+
+lora:
+  rank: 64
+  alpha: 64
+  dropout: 0.0
+  # attention (to_*) + feed-forward (ff.net.*) so the LoRA can move style, not just attention.
+  target_modules: ["to_q", "to_k", "to_v", "to_out.0", "ff.net.0.proj", "ff.net.2"]
+  train_text_encoder: true
+  text_target_modules: ["q_proj", "k_proj", "v_proj", "out_proj"]
+
+training:
+  seed: 42
+  base_kind: sdxl
+  base_model: stabilityai/stable-diffusion-xl-base-1.0
+  batch_size: 1
+  grad_accum: 4
+  learning_rate: 5.0e-5
+  weight_decay: 1.0e-2
+  warmup_steps: 50
+  max_steps: 1500
+  grad_clip: 1.0
+  amp: true
+  snapshot_interval: 500
+  checkpoint_interval: 500
+  num_workers: 0
+  snapshot_prompts:
+    - "bufo riding a skateboard, flat cartoon frog emoji sticker, bold simple shapes, white background"
+    - "bufo as a ninja, flat cartoon frog emoji sticker, bold simple shapes, white background"
+    - "bufo drinking coffee, flat cartoon frog emoji sticker, bold simple shapes, white background"
+    - "bufo as an astronaut floating in space, flat cartoon frog emoji sticker, bold simple shapes, white background"
