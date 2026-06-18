@@ -34,7 +34,7 @@ PROMPT = (
     "and reads as the original bufo character."
 )
 
-_BOOL_TRUE = {1, "1", True, "yes", "true", "Yes", "True"}
+_BOOL_TRUE = {1, "1", "yes", "true", "Yes", "True"}
 
 
 def parse_curation(text: str) -> dict:
