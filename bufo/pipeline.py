@@ -355,8 +355,14 @@ def load_inference_pipeline(
     *,
     base_kind: str = "sd15",
     dtype: torch.dtype = torch.float32,
+    sampler: str | None = None,
 ) -> Any:
-    """Build an SD/SDXL/FLUX pipeline (safety checker disabled for SD1.5) + optional LoRA."""
+    """Build an SD/SDXL/FLUX pipeline (safety checker disabled for SD1.5) + optional LoRA.
+
+    ``sampler`` (sd15/sdxl only) overrides the base's default scheduler. SDXL defaults to
+    Euler, which is the most artifact-prone; "dpmpp_2m_karras" (DPM++ 2M Karras) is the
+    cleaner choice. Flux ignores it (flow-matching has its own scheduler).
+    """
     if base_kind == "flux":
         from diffusers import FlowMatchEulerDiscreteScheduler, FluxPipeline
 
@@ -391,6 +397,21 @@ def load_inference_pipeline(
             base_model, torch_dtype=dtype, safety_checker=None, requires_safety_checker=False
         )
     pipe.to(device)
+    if sampler:
+        from diffusers import DPMSolverMultistepScheduler, EulerDiscreteScheduler
+
+        if sampler in ("dpmpp_2m_karras", "dpmpp_2m"):
+            pipe.scheduler = DPMSolverMultistepScheduler.from_config(
+                pipe.scheduler.config, algorithm_type="dpmsolver++", use_karras_sigmas=sampler.endswith("karras")
+            )
+        elif sampler in ("dpmpp_sde_karras", "dpmpp_sde"):
+            pipe.scheduler = DPMSolverMultistepScheduler.from_config(
+                pipe.scheduler.config, algorithm_type="sde-dpmsolver++", use_karras_sigmas=sampler.endswith("karras")
+            )
+        elif sampler == "euler":
+            pipe.scheduler = EulerDiscreteScheduler.from_config(pipe.scheduler.config)
+        else:
+            raise ValueError(f"Unknown sampler '{sampler}' (use dpmpp_2m_karras|dpmpp_sde_karras|euler)")
     if lora_dir is not None:
         pipe.load_lora_weights(str(lora_dir))
     return pipe

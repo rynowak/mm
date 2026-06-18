@@ -128,6 +128,7 @@ def evaluate(
     clip_embedder: ClipEmbedder | None = None,
     write_artifacts: bool = True,
     resolution: int | None = None,
+    sampler: str | None = None,
 ) -> EvalScorecard:
     """Generate the held-out set, score it with CLIP, optionally write artifacts."""
     device = device or get_device()
@@ -136,7 +137,9 @@ def evaluate(
     n_imgs = images_per_prompt if images_per_prompt is not None else eval_config.images_per_prompt
     prompts = [eval_config.prompt_template.format(subject=s) + eval_config.suffix for s in subjects]
 
-    pipe = load_inference_pipeline(base_model, device, Path(checkpoint) if checkpoint else None, base_kind=base_kind)
+    pipe = load_inference_pipeline(
+        base_model, device, Path(checkpoint) if checkpoint else None, base_kind=base_kind, sampler=sampler
+    )
     grids = generate_eval_images(
         pipe,
         prompts,
@@ -308,6 +311,12 @@ def main() -> None:
         default=None,
         help="Sampling resolution; set to the LoRA's training resolution to avoid subject tiling (e.g. 768 for SDXL).",
     )
+    parser.add_argument(
+        "--sampler",
+        type=str,
+        default=None,
+        help="Override sampler (sd15/sdxl): dpmpp_2m_karras | dpmpp_sde_karras | euler. Default = base default.",
+    )
     args = parser.parse_args()
 
     cfg = EvalConfig.from_yaml(args.eval_config)
@@ -320,6 +329,7 @@ def main() -> None:
         out_dir=Path(args.out) if args.out else None,
         images_per_prompt=args.images_per_prompt,
         resolution=args.resolution,
+        sampler=args.sampler,
     )
     print(
         f"identity {scorecard.identity:.3f} | adherence {scorecard.prompt_adherence:.3f} | "
