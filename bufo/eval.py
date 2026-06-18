@@ -85,8 +85,14 @@ def generate_eval_images(
     guidance: float,
     negative_prompt: str,
     seed: int,
+    resolution: int | None = None,
 ) -> list[list[Image.Image]]:
-    """Seeded generation (seed scheme mirrors sample.py). Returns images[prompt][n]."""
+    """Seeded generation (seed scheme mirrors sample.py). Returns images[prompt][n].
+
+    ``resolution`` should match the LoRA's training resolution: a diffusion model
+    generating above the resolution it was trained at duplicates/tiles the subject
+    (e.g. an SDXL LoRA trained at 768 tiles when sampled at SDXL's native 1024).
+    """
     pipe.set_progress_bar_config(disable=True)
     grids: list[list[Image.Image]] = []
     for pi, prompt in enumerate(prompts):
@@ -95,6 +101,8 @@ def generate_eval_images(
         for n in range(images_per_prompt):
             gen = torch.Generator(device="cpu").manual_seed(seed + pi * 1000 + n)
             kwargs = {"num_inference_steps": steps, "guidance_scale": guidance, "generator": gen}
+            if resolution:
+                kwargs["height"] = kwargs["width"] = resolution
             # FluxPipeline (guidance-distilled) has no `negative_prompt` arg; only pass it to
             # pipelines that accept it (sd15/sdxl), and only when non-empty.
             if negative_prompt and "negative_prompt" in inspect.signature(pipe.__call__).parameters:
@@ -119,6 +127,7 @@ def evaluate(
     step: int | None = None,
     clip_embedder: ClipEmbedder | None = None,
     write_artifacts: bool = True,
+    resolution: int | None = None,
 ) -> EvalScorecard:
     """Generate the held-out set, score it with CLIP, optionally write artifacts."""
     device = device or get_device()
@@ -136,6 +145,7 @@ def evaluate(
         guidance=eval_config.guidance_scale,
         negative_prompt=eval_config.negative_prompt,
         seed=eval_config.seed,
+        resolution=resolution,
     )
 
     embedder = clip_embedder or ClipEmbedder.load(eval_config.clip_model, device)
@@ -292,6 +302,12 @@ def main() -> None:
     parser.add_argument("--data-dir", type=str, default="bufo/data")
     parser.add_argument("--out", type=str, default=None)
     parser.add_argument("--images-per-prompt", type=int, default=None)
+    parser.add_argument(
+        "--resolution",
+        type=int,
+        default=None,
+        help="Sampling resolution; set to the LoRA's training resolution to avoid subject tiling (e.g. 768 for SDXL).",
+    )
     args = parser.parse_args()
 
     cfg = EvalConfig.from_yaml(args.eval_config)
@@ -303,6 +319,7 @@ def main() -> None:
         train_data_dir=args.data_dir,
         out_dir=Path(args.out) if args.out else None,
         images_per_prompt=args.images_per_prompt,
+        resolution=args.resolution,
     )
     print(
         f"identity {scorecard.identity:.3f} | adherence {scorecard.prompt_adherence:.3f} | "
