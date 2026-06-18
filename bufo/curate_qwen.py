@@ -21,25 +21,34 @@ from bufo.vlm_judge import DEFAULT_MODEL_ID, VLMJudge, _vision_inputs
 if TYPE_CHECKING:
     from PIL import Image
 
-# The two defining traits of the *original* bufo, per direct review of the v2 output.
+# Tightened after reviewing the first pass: (1) require a CARTOON FROG (the v1 prompt
+# kept a human face, a cube, and a realistic toad photo); (2) define canonical
+# POSITIVELY and allow props/emotions (the v1 prompt dropped clearly-canonical bufos
+# that were crying / heart-eyed / holding things).
 PROMPT = (
-    "You are curating reference images for generating the ORIGINAL 'bufo' frog emoji. "
-    "The canonical bufo has TWO defining traits: (1) a MUTED, desaturated olive/sage "
-    "green color, NOT bright/neon/saturated green; and (2) big, round, expressive, "
-    "human-like eyes, NOT tiny dots, NOT closed, NOT googly. Many images here are "
-    "off-style derivatives (wrong colors, wrong eyes, other art styles, photos, text). "
-    "Judge THIS image and reply with STRICT JSON only: "
-    '{"muted_palette": 0 or 1, "expressive_eyes": 0 or 1, "canonical_bufo": 0 or 1, '
-    '"reason": "<=8 words"}. Set canonical_bufo=1 only if it clearly matches BOTH traits '
-    "and reads as the original bufo character."
+    "You are curating images of the 'bufo' frog emoji, keeping only ones in the ORIGINAL "
+    "canonical style. The canonical bufo is a SIMPLE, FLAT CARTOON frog with: soft MUTED "
+    "olive/sage green skin (not bright, neon, or saturated), LARGE round expressive eyes, "
+    "and clean bold outlines — the classic 'concerned frog' sticker look. KEEP it even when "
+    "it wears props or clothing, holds an object, or shows an emotion (crying, hearts, angry, "
+    "etc.) — as long as the underlying character is this canonical cartoon bufo. DROP only "
+    "clearly OFF-STYLE images: photographs or realistic/3D toads; human faces or non-frog "
+    "subjects; plain objects, logos, or signs; bright neon or non-green coloring; tiny dot "
+    "eyes or googly/closed eyes; a distinctly different art style; or images that are mostly "
+    "text. Reply with STRICT JSON only: "
+    '{"cartoon_frog": 0 or 1, "muted_green": 0 or 1, "expressive_eyes": 0 or 1, '
+    '"canonical_bufo": 0 or 1, "reason": "<=8 words"}. Set canonical_bufo=1 if it is the '
+    "canonical cartoon bufo character (props/emotions are fine); set it 0 only for the "
+    "off-style cases listed above."
 )
 
 _BOOL_TRUE = {1, "1", "yes", "true", "Yes", "True"}
+_FIELDS = ("cartoon_frog", "muted_green", "expressive_eyes", "canonical_bufo")
 
 
 def parse_curation(text: str) -> dict:
     """Extract the strict-JSON verdict; default to drop on any parse failure."""
-    fail = {"muted_palette": 0, "expressive_eyes": 0, "canonical_bufo": 0, "reason": "parse-fail"}
+    fail = {**{k: 0 for k in _FIELDS}, "reason": "parse-fail"}
     m = re.search(r"\{.*\}", text, re.S)
     if not m:
         return dict(fail)
@@ -47,7 +56,7 @@ def parse_curation(text: str) -> dict:
         d = json.loads(m.group(0))
     except (ValueError, TypeError):
         return dict(fail)
-    out = {k: (1 if d.get(k) in _BOOL_TRUE else 0) for k in ("muted_palette", "expressive_eyes", "canonical_bufo")}
+    out = {k: (1 if d.get(k) in _BOOL_TRUE else 0) for k in _FIELDS}
     out["reason"] = str(d.get("reason", ""))[:60]
     return out
 
