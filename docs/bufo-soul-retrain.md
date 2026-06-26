@@ -128,4 +128,33 @@ default for the soul LoRA — identity, props, and clean output are there. Treat
 expression captions, then a short retrain. Don't chase expression with eval-time
 tricks alone; it's in the training distribution.
 
-<!-- FILLED-IN RESULTS -->
+---
+
+## UPDATE — pivot to FLUX (supersedes the SDXL recommendations above)
+
+The SDXL soul LoRA above was rejected on a close look: **cursed anatomy** (melted
+eyes/mouths) — SDXL's coherence cap, which no recipe tweak fixes. We pivoted to FLUX,
+which is coherent. The earlier FLUX failures were *style transfer*, not coherence: the
+LoRA was attention-only rank-32 (a concept LoRA). Training **attention + all MLP
+layers at rank 64** (`lora-flux-style.yaml`) on the structured data finally takes the
+bufo style while staying coherent.
+
+- **flux-soul-style** (v3 data): coherent + on-style + props + expression all working
+  (identity 0.789 / adherence 0.800, best of any run). ~50% of cells near-perfect.
+- **Remaining: consistency.** (1) warm-food prompts (coffee/pizza) recolor the frog
+  **orange**; (2) ~30% of seeds drift to a **flat clipart** style.
+- **v4** (`data_canon_v4`, running): re-caption `green bufo, …, soft-shaded cartoon
+  sticker` to anchor color + shading. (`flat cartoon sticker` was actively wrong — bufo
+  is soft-shaded.)
+- Flux LoRA eval load: diffusers' `load_lora_weights` drops the attention adapter on
+  the round-trip → load via the peft path (`--lora-config`, see `_apply_flux_lora`).
+
+### Canonical bufo anatomy (off-model tells to encode — task #24)
+
+The model gets the gestalt but drifts on specifics. Bake into the caption schema /
+negative prompt in the next pass:
+- **Short, stubby arms and legs** — drift-frogs render long thin limbs (negative:
+  "long legs, lanky").
+- **Long tongue** — a bufo signature; under-used. Add as a positive cue.
+- **No teeth** — the "angry" cell rendered fangs (negative: "teeth, fangs").
+- (v4) muted-**green** body, **soft-shaded** (not flat).
