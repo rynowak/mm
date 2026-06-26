@@ -34,14 +34,16 @@ fi
 
 # FLUX is guidance-distilled (negative prompts ~no-op) and doesn't tile, so eval with
 # the plain structured prompts at native 1024, full LoRA. ipp=2 keeps it ~under an hour.
+# EVAL_CONFIG must match the training caption schema (v4 = green/soft anchored).
+EVAL_CONFIG="${EVAL_CONFIG:-bufo/configs/eval-bufo-soul.yaml}"
 CKPTS="${CKPTS:-600}"
 for CK in $CKPTS; do
   [ -d "$RUN/checkpoint-$CK" ] || continue
   [ -d "$RUN/eval-$CK" ] && continue
-  log "=== FLUX eval ckpt $CK @1024 (ipp=2) ==="
+  log "=== FLUX eval ckpt $CK @1024 (ipp=2) config=$EVAL_CONFIG ==="
   python -m bufo.eval --lora "$RUN/checkpoint-$CK" --base-kind flux \
     --base-model black-forest-labs/FLUX.1-dev \
-    --eval-config bufo/configs/eval-bufo-soul.yaml --data-dir "$DATA" \
+    --eval-config "$EVAL_CONFIG" --data-dir "$DATA" \
     --lora-config "$TRAIN_CONFIG" \
     --images-per-prompt 2 --resolution 1024 --out "$RUN/eval-$CK" \
     && log "eval $CK OK -> $RUN/eval-$CK" || log "eval $CK FAILED rc=$?"

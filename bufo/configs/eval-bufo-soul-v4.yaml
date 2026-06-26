@@ -1,0 +1,37 @@
+# Eval for the v4 color/style-anchored schema: `green bufo, {subject}, soft-shaded
+# cartoon sticker`. Anchors green (kills the warm-food orange drift) and soft shading
+# (kills the flat-clipart drift) right in the prompt, matching the v4 training captions.
+concept_text: "a green bufo, a soft-shaded cartoon frog sticker"
+prompt_template: "green bufo, {subject}"
+suffix: ", soft-shaded cartoon sticker"
+clip_model: "laion/CLIP-ViT-B-32-laion2B-s34B-b79K"
+clipscore_w: 2.5
+seed: 20260610
+images_per_prompt: 2
+num_inference_steps: 30
+guidance_scale: 5.5
+negative_prompt: "deformed, blurry, low quality, extra limbs"
+
+prompts:
+  - "concerned"
+  - "happy"
+  - "sad, crying"
+  - "angry"
+  - "smug"
+  - "surprised"
+  - "happy, holding coffee"
+  - "neutral, holding a sword"
+  - "content, holding flowers"
+  - "neutral, wearing a wizard hat"
+  - "happy, eating pizza"
+  - "neutral, holding a balloon"
+  - "concerned, sitting"
+  - "happy, arms raised"
+  - "neutral, holding a book"
+  - "angry, holding a torch"
+
+step_prompts:
+  - "happy, holding coffee"
+  - "happy, eating pizza"
+  - "sad, crying"
+  - "neutral, wearing a wizard hat"
