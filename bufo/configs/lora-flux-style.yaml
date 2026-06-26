@@ -53,7 +53,7 @@ training:
   checkpoint_interval: 400   # fewer big checkpoints on the shared NFS; eval the last
   num_workers: 0
   snapshot_prompts:
-    - "green bufo, happy, holding coffee, soft-shaded cartoon sticker"
-    - "green bufo, happy, eating pizza, soft-shaded cartoon sticker"
-    - "green bufo, sad, crying, soft-shaded cartoon sticker"
-    - "green bufo, neutral, wearing a wizard hat, soft-shaded cartoon sticker"
+    - "olive green bufo, happy, holding coffee, big forward-set eyes, short stubby limbs, soft-shaded cartoon sticker"
+    - "olive green bufo, happy, eating pizza, big forward-set eyes, short stubby limbs, soft-shaded cartoon sticker"
+    - "olive green bufo, sad, crying, big forward-set eyes, short stubby limbs, soft-shaded cartoon sticker"
+    - "olive green bufo, neutral, wearing a wizard hat, big forward-set eyes, short stubby limbs, soft-shaded cartoon sticker"

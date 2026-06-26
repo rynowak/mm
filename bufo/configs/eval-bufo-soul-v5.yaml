@@ -1,0 +1,37 @@
+# Eval for the v5 schema: olive green + eye-placement/limb cues, soft-shaded.
+# Matches the v5 training captions; negative now also fights the off-model tells
+# (teeth/fangs, lanky legs, bright/lime green) per the v5 identity spec (task #24).
+concept_text: "an olive green bufo, a soft-shaded cartoon frog sticker"
+prompt_template: "olive green bufo, {subject}"
+suffix: ", big forward-set eyes, short stubby limbs, soft-shaded cartoon sticker"
+clip_model: "laion/CLIP-ViT-B-32-laion2B-s34B-b79K"
+clipscore_w: 2.5
+seed: 20260610
+images_per_prompt: 2
+num_inference_steps: 30
+guidance_scale: 5.5
+negative_prompt: "deformed, blurry, low quality, extra limbs, teeth, fangs, long legs, lanky, bright green, lime green"
+
+prompts:
+  - "concerned"
+  - "happy"
+  - "sad, crying"
+  - "angry"
+  - "smug"
+  - "surprised"
+  - "happy, holding coffee"
+  - "neutral, holding a sword"
+  - "content, holding flowers"
+  - "neutral, wearing a wizard hat"
+  - "happy, eating pizza"
+  - "neutral, holding a balloon"
+  - "concerned, sitting"
+  - "happy, arms raised"
+  - "neutral, holding a book"
+  - "angry, holding a torch"
+
+step_prompts:
+  - "happy, holding coffee"
+  - "neutral, wearing a wizard hat"
+  - "sad, crying"
+  - "angry, holding a torch"
