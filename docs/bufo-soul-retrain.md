@@ -149,12 +149,24 @@ bufo style while staying coherent.
 - Flux LoRA eval load: diffusers' `load_lora_weights` drops the attention adapter on
   the round-trip → load via the peft path (`--lora-config`, see `_apply_flux_lora`).
 
-### Canonical bufo anatomy (off-model tells to encode — task #24)
+### v5 identity spec (task #24)
 
-The model gets the gestalt but drifts on specifics. Bake into the caption schema /
-negative prompt in the next pass:
+**Reference exemplar:** the v4 wizard-hat right image (`flux-soul-v4/eval-800/images/
+09_01.png`) — user: *"the platonic ideal of a bufo."* Muted olive, eyes high/forward/
+close-set, soft-shaded, stubby arms. This is the target for curation + captions.
+
+The model gets the gestalt but drifts on specifics:
+- **Color: muted OLIVE green**, consistent — *not* bright/lime/generic green (v4's
+  "green bufo" came out too bright/varied). → caption "olive green bufo"; maybe negative
+  "bright green, lime green".
+- **Eye placement (the key identity feature)** — eyes set HIGH and FORWARD, close
+  together on top of the head, earnest look. Variance here is the main off-model tell.
+  Likely a **data-curation** criterion (curate to the ideal placement), not just captions.
 - **Short, stubby arms and legs** — drift-frogs render long thin limbs (negative:
   "long legs, lanky").
 - **Long tongue** — a bufo signature; under-used. Add as a positive cue.
-- **No teeth** — the "angry" cell rendered fangs (negative: "teeth, fangs").
-- (v4) muted-**green** body, **soft-shaded** (not flat).
+- **No teeth** — the v4 torch-right cell rendered fangs (negative: "teeth, fangs").
+- Keep the v4 wins: **soft-shaded** (not flat) + the green anchor that killed the orange
+  drift.
+
+v5 = these + colleague notes, run as one pass once the notes are in.
