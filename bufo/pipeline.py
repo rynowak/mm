@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import random
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -35,8 +36,6 @@ from peft.utils import get_peft_model_state_dict, set_peft_model_state_dict
 from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizer
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from torch.optim import Optimizer
     from torch.optim.lr_scheduler import LRScheduler
 
@@ -348,6 +347,40 @@ def encode_conditioning(
     }
 
 
+def _apply_flux_lora(
+    transformer: torch.nn.Module,
+    lora_dir: Path,
+    lora_config_path: str | Path | None,
+    flux_dtype: torch.dtype,
+) -> None:
+    """Attach the trained flux LoRA to ``transformer`` via peft (the training path).
+
+    diffusers' ``load_lora_weights`` drops the attention adapter on this round-trip, so
+    rebuild the adapter from the training config and load the full peft state dict saved
+    in ``training_state.pt`` (keyed ``unet_lora`` — the denoiser adapter).
+    """
+    if lora_config_path is None:
+        raise ValueError("flux LoRA inference needs lora_config_path (the training YAML) to rebuild the adapter")
+    from bufo.config import BufoLoRAConfig
+
+    lcfg = BufoLoRAConfig.from_yaml(lora_config_path).lora
+    adapter = LoraConfig(
+        r=lcfg.rank,
+        lora_alpha=lcfg.alpha,
+        lora_dropout=0.0,
+        target_modules=lcfg.flux_target_modules,
+        init_lora_weights=False,
+    )
+    transformer.add_adapter(adapter)
+    state = torch.load(lora_dir / "training_state.pt", map_location="cpu", weights_only=False)
+    set_peft_model_state_dict(transformer, state["unet_lora"])
+    # Adapter params are saved fp32 (forced during training); cast to the base dtype so the
+    # forward doesn't mix bf16 base with fp32 LoRA.
+    for name, param in transformer.named_parameters():
+        if "lora_" in name:
+            param.data = param.data.to(flux_dtype)
+
+
 def load_inference_pipeline(
     base_model: str,
     device: torch.device,
@@ -357,6 +390,7 @@ def load_inference_pipeline(
     dtype: torch.dtype = torch.float32,
     sampler: str | None = None,
     lora_scale: float = 1.0,
+    lora_config_path: str | Path | None = None,
 ) -> Any:
     """Build an SD/SDXL/FLUX pipeline (safety checker disabled for SD1.5) + optional LoRA.
 
@@ -374,6 +408,13 @@ def load_inference_pipeline(
         # what build_live_pipe does for the in-training snapshots (which work).
         flux_dtype = torch.bfloat16 if dtype == torch.float32 else dtype
         comp = _load_flux_components(base_model, device, flux_dtype)
+        if lora_dir is not None:
+            # diffusers' FluxPipeline.load_lora_weights silently DROPS the attention LoRA
+            # layers on this checkpoint round-trip (only the MLP half loads → broken
+            # output). Load the full adapter the way training does instead: peft
+            # add_adapter (from the training config) + set_peft_model_state_dict from
+            # training_state.pt. Mirrors load_training_state / build_live_pipe (which work).
+            _apply_flux_lora(comp.unet, Path(lora_dir), lora_config_path, flux_dtype)
         flux_pipe = FluxPipeline(
             vae=comp.vae,
             text_encoder=comp.text_encoder,
@@ -385,11 +426,6 @@ def load_inference_pipeline(
             # FlowMatchEulerDiscreteScheduler() has no shift and under-denoises → blurry.
             scheduler=FlowMatchEulerDiscreteScheduler.from_pretrained(base_model, subfolder="scheduler"),
         )
-        if lora_dir is not None:
-            # load_lora_weights routes transformer_lora_layers into the transformer (tiny, 26M).
-            flux_pipe.load_lora_weights(str(lora_dir))
-            if lora_scale != 1.0:
-                flux_pipe.fuse_lora(lora_scale=lora_scale)
         return flux_pipe
     if base_kind == "sdxl":
         pipe: StableDiffusionPipeline | StableDiffusionXLPipeline = StableDiffusionXLPipeline.from_pretrained(

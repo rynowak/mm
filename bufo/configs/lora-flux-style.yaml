@@ -1,0 +1,59 @@
+# Bufo FLUX.1-dev *style* LoRA. The earlier FLUX run transferred poorly (generic
+# frogs, not bufo): it was rank-32 and trained ONLY attention, which can't override
+# FLUX's strong realistic prior. Style in a DiT lives largely in the feed-forward
+# (MLP) blocks, so this targets attention + ALL the MLP linears at higher rank.
+# A100 80GB only (12B transformer); reuses the proven flux flow-matching knobs.
+data:
+  resolution: 1024
+  random_flip: true
+
+lora:
+  rank: 64      # up from 32 — more capacity to actually reshape style
+  alpha: 64     # alpha==rank -> effective scale 1.0
+  dropout: 0.0
+  # Verified against FluxTransformer2DModel (diffusers 0.31): attention + the MLP
+  # feed-forward in both the double-stream (ff / ff_context) and single-stream
+  # (proj_mlp / proj_out) blocks — the layers that carry visual style.
+  flux_target_modules:
+    - "to_q"
+    - "to_k"
+    - "to_v"
+    - "to_out.0"
+    - "add_q_proj"
+    - "add_k_proj"
+    - "add_v_proj"
+    - "to_add_out"
+    - "ff.net.0.proj"
+    - "ff.net.2"
+    - "ff_context.net.0.proj"
+    - "ff_context.net.2"
+    - "proj_mlp"
+    - "proj_out"
+  train_text_encoder: false
+
+training:
+  seed: 42
+  base_kind: flux
+  base_model: black-forest-labs/FLUX.1-dev
+  batch_size: 1
+  grad_accum: 4
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-2
+  warmup_steps: 50
+  max_steps: 800
+  grad_clip: 1.0
+  amp: true
+  flux_logit_mean: 0.0
+  flux_logit_std: 1.0
+  flux_weighting_scheme: none
+  flux_guidance: 1.0
+  flux_max_sequence_length: 512
+  flux_gradient_checkpointing: true
+  snapshot_interval: 200
+  checkpoint_interval: 400   # fewer big checkpoints on the shared NFS; eval the last
+  num_workers: 0
+  snapshot_prompts:
+    - "bufo, happy, holding coffee, flat cartoon sticker"
+    - "bufo, neutral, wearing a wizard hat, flat cartoon sticker"
+    - "bufo, sad, crying, flat cartoon sticker"
+    - "bufo, angry, holding a torch, flat cartoon sticker"

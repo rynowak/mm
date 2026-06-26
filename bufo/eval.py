@@ -130,6 +130,7 @@ def evaluate(
     resolution: int | None = None,
     sampler: str | None = None,
     lora_scale: float = 1.0,
+    lora_config_path: str | Path | None = None,
 ) -> EvalScorecard:
     """Generate the held-out set, score it with CLIP, optionally write artifacts."""
     device = device or get_device()
@@ -145,6 +146,7 @@ def evaluate(
         base_kind=base_kind,
         sampler=sampler,
         lora_scale=lora_scale,
+        lora_config_path=lora_config_path,
     )
     grids = generate_eval_images(
         pipe,
@@ -329,6 +331,13 @@ def main() -> None:
         default=1.0,
         help="Strength to fuse the LoRA at (<1.0 tames high-rank over-application / subject tiling).",
     )
+    parser.add_argument(
+        "--lora-config",
+        type=str,
+        default=None,
+        help="Training YAML for the LoRA (REQUIRED for flux: rebuilds the adapter via peft, "
+        "since diffusers' flux load_lora_weights drops the attention layers).",
+    )
     args = parser.parse_args()
 
     cfg = EvalConfig.from_yaml(args.eval_config)
@@ -343,6 +352,7 @@ def main() -> None:
         resolution=args.resolution,
         sampler=args.sampler,
         lora_scale=args.lora_scale,
+        lora_config_path=args.lora_config,
     )
     print(
         f"identity {scorecard.identity:.3f} | adherence {scorecard.prompt_adherence:.3f} | "
