@@ -1,0 +1,36 @@
+# Bufo "soul" retrain: SDXL @1024 on the soul-consistent 242 with STRUCTURED captions
+# (bufo, {expression}, {prop}, {pose}, flat cartoon sticker). Goal: bake the earnest
+# bufo identity into the trigger AND make expression/prop/pose prompt-controllable.
+# Rank 96 (up from 64) to out-pull SDXL's generic-frog prior.
+data:
+  resolution: 1024
+  random_flip: true
+
+lora:
+  rank: 96
+  alpha: 96
+  dropout: 0.0
+  target_modules: ["to_q", "to_k", "to_v", "to_out.0", "ff.net.0.proj", "ff.net.2"]
+  train_text_encoder: true
+  text_target_modules: ["q_proj", "k_proj", "v_proj", "out_proj"]
+
+training:
+  seed: 42
+  base_kind: sdxl
+  base_model: stabilityai/stable-diffusion-xl-base-1.0
+  batch_size: 1
+  grad_accum: 4
+  learning_rate: 5.0e-5
+  weight_decay: 1.0e-2
+  warmup_steps: 75
+  max_steps: 2000
+  grad_clip: 1.0
+  amp: true
+  snapshot_interval: 500
+  checkpoint_interval: 500
+  num_workers: 0
+  snapshot_prompts:
+    - "bufo, concerned, flat cartoon sticker"
+    - "bufo, happy, holding coffee, flat cartoon sticker"
+    - "bufo, angry, flat cartoon sticker"
+    - "bufo, sad, crying, flat cartoon sticker"
