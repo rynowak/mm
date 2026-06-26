@@ -129,6 +129,7 @@ def evaluate(
     write_artifacts: bool = True,
     resolution: int | None = None,
     sampler: str | None = None,
+    lora_scale: float = 1.0,
 ) -> EvalScorecard:
     """Generate the held-out set, score it with CLIP, optionally write artifacts."""
     device = device or get_device()
@@ -138,7 +139,12 @@ def evaluate(
     prompts = [eval_config.prompt_template.format(subject=s) + eval_config.suffix for s in subjects]
 
     pipe = load_inference_pipeline(
-        base_model, device, Path(checkpoint) if checkpoint else None, base_kind=base_kind, sampler=sampler
+        base_model,
+        device,
+        Path(checkpoint) if checkpoint else None,
+        base_kind=base_kind,
+        sampler=sampler,
+        lora_scale=lora_scale,
     )
     grids = generate_eval_images(
         pipe,
@@ -317,6 +323,12 @@ def main() -> None:
         default=None,
         help="Override sampler (sd15/sdxl): dpmpp_2m_karras | dpmpp_sde_karras | euler. Default = base default.",
     )
+    parser.add_argument(
+        "--lora-scale",
+        type=float,
+        default=1.0,
+        help="Strength to fuse the LoRA at (<1.0 tames high-rank over-application / subject tiling).",
+    )
     args = parser.parse_args()
 
     cfg = EvalConfig.from_yaml(args.eval_config)
@@ -330,6 +342,7 @@ def main() -> None:
         images_per_prompt=args.images_per_prompt,
         resolution=args.resolution,
         sampler=args.sampler,
+        lora_scale=args.lora_scale,
     )
     print(
         f"identity {scorecard.identity:.3f} | adherence {scorecard.prompt_adherence:.3f} | "

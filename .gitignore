@@ -12,3 +12,6 @@ runs/
 .claude/worktrees/
 .live/
 bufo/_fluxlora/
+
+# local NFS staging symlinks (point at bufo/data/images)
+bufo/data_canon*/images

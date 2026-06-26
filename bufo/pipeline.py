@@ -356,6 +356,7 @@ def load_inference_pipeline(
     base_kind: str = "sd15",
     dtype: torch.dtype = torch.float32,
     sampler: str | None = None,
+    lora_scale: float = 1.0,
 ) -> Any:
     """Build an SD/SDXL/FLUX pipeline (safety checker disabled for SD1.5) + optional LoRA.
 
@@ -387,6 +388,8 @@ def load_inference_pipeline(
         if lora_dir is not None:
             # load_lora_weights routes transformer_lora_layers into the transformer (tiny, 26M).
             flux_pipe.load_lora_weights(str(lora_dir))
+            if lora_scale != 1.0:
+                flux_pipe.fuse_lora(lora_scale=lora_scale)
         return flux_pipe
     if base_kind == "sdxl":
         pipe: StableDiffusionPipeline | StableDiffusionXLPipeline = StableDiffusionXLPipeline.from_pretrained(
@@ -414,6 +417,11 @@ def load_inference_pipeline(
             raise ValueError(f"Unknown sampler '{sampler}' (use dpmpp_2m_karras|dpmpp_sde_karras|euler)")
     if lora_dir is not None:
         pipe.load_lora_weights(str(lora_dir))
+        # A high-rank LoRA at full strength over-applies the trigger (subject tiling /
+        # duplication). fuse_lora(lora_scale=) bakes the adapter in at a chosen strength so
+        # eval can read the model at the strength it'll actually be used at (~0.7), not 1.0.
+        if lora_scale != 1.0:
+            pipe.fuse_lora(lora_scale=lora_scale)
     return pipe
 
 

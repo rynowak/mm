@@ -1,0 +1,38 @@
+# Same as eval-bufo-soul.yaml but with an ANTI-TILING negative prompt. ckpt-1000
+# tiled ~half the seeds (many small frogs filling the 1024 canvas) independent of
+# LoRA strength, so this tests whether negative-prompting the multi-subject failure
+# mode (collage / grid / sticker-sheet / repeated) suppresses it at eval time.
+concept_text: "a bufo, a green cartoon frog sticker"
+prompt_template: "bufo, {subject}"
+suffix: ", flat cartoon sticker"
+clip_model: "laion/CLIP-ViT-B-32-laion2B-s34B-b79K"
+clipscore_w: 2.5
+seed: 20260610
+images_per_prompt: 3
+num_inference_steps: 30
+guidance_scale: 5.5
+negative_prompt: "deformed, blurry, low quality, extra limbs, multiple frogs, many frogs, collage, grid, sticker sheet, repeated pattern, group, crowd, duplicate, tiled"
+
+prompts:
+  - "concerned"
+  - "happy"
+  - "sad, crying"
+  - "angry"
+  - "smug"
+  - "surprised"
+  - "happy, holding coffee"
+  - "neutral, holding a sword"
+  - "content, holding flowers"
+  - "neutral, wearing a wizard hat"
+  - "happy, eating pizza"
+  - "neutral, holding a balloon"
+  - "concerned, sitting"
+  - "happy, arms raised"
+  - "neutral, holding a book"
+  - "angry, holding a torch"
+
+step_prompts:
+  - "concerned"
+  - "happy, holding coffee"
+  - "sad, crying"
+  - "neutral, wearing a wizard hat"
