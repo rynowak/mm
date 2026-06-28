@@ -15,3 +15,6 @@ bufo/_fluxlora/
 
 # local NFS staging symlinks (point at bufo/data/images)
 bufo/data_canon*/images
+
+# teacher-generated v6 training images (regenerable; metadata is tracked)
+bufo/data_teacher_v6/images/

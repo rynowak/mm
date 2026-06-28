@@ -1,0 +1,37 @@
+# Eval for v6 (teacher-distilled). Caption schema = `olive green bufo, {expr},
+# soft-shaded cartoon sticker` (identity/proportions carried by the on-model teacher
+# data, so the caption only anchors color/style + names the expression).
+concept_text: "an olive green bufo, a soft-shaded cartoon frog sticker"
+prompt_template: "olive green bufo, {subject}"
+suffix: ", soft-shaded cartoon sticker"
+clip_model: "laion/CLIP-ViT-B-32-laion2B-s34B-b79K"
+clipscore_w: 2.5
+seed: 20260610
+images_per_prompt: 2
+num_inference_steps: 30
+guidance_scale: 5.5
+negative_prompt: "deformed, blurry, low quality, extra limbs, teeth, fangs, text, watermark"
+
+prompts:
+  - "neutral"
+  - "happy"
+  - "sad"
+  - "crying"
+  - "angry"
+  - "smug"
+  - "surprised"
+  - "content"
+  - "concerned"
+  - "excited"
+  - "sleepy"
+  - "laughing"
+  - "happy, holding coffee"
+  - "neutral, wearing a wizard hat"
+  - "angry, holding a torch"
+  - "content, holding flowers"
+
+step_prompts:
+  - "happy"
+  - "sad"
+  - "angry"
+  - "surprised"

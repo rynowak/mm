@@ -14,7 +14,14 @@ RUN="${RUN:-/mnt/ray/bufo-runs/flux-soul}"
 TRAIN_CONFIG="${TRAIN_CONFIG:-bufo/configs/lora-flux.yaml}"
 MAX_STEPS="${MAX_STEPS:-600}"
 mkdir -p "$DATA"
-ln -sfn /mnt/ray/bufo-data/images "$DATA/images"
+# IMAGES_SRC: a real image dir uploaded with the job (e.g. teacher-generated cells) to
+# copy in; default = symlink the staged corpus images on NFS.
+IMAGES_SRC="${IMAGES_SRC:-/mnt/ray/bufo-data/images}"
+if [ "$IMAGES_SRC" != "/mnt/ray/bufo-data/images" ]; then
+  rm -rf "$DATA/images"; cp -r "$IMAGES_SRC" "$DATA/images"
+else
+  ln -sfn /mnt/ray/bufo-data/images "$DATA/images"
+fi
 cp "$META_SRC" "$DATA/metadata.jsonl"
 N=$(wc -l < "$DATA/metadata.jsonl" | tr -d ' '); log "structured-caption records: $N (from $META_SRC)"
 export HF_HOME=/mnt/ray/hf
