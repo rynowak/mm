@@ -44,7 +44,7 @@ def main() -> None:
     rows: list[dict] = []
     for meta_path, image_root in SRCS:
         n = 0
-        for line in open(meta_path):
+        for line in open(meta_path):  # noqa: SIM115 (simple read iteration)
             r = json.loads(line)
             fn = os.path.basename(r["file_name"])
             src = os.path.join(image_root, fn)
