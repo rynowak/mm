@@ -21,7 +21,7 @@ OUT = os.environ["OUT"]
 RES = int(os.environ.get("RES", "1024"))
 IPP = int(os.environ.get("IPP", "2"))
 
-SUBJECTS = [
+_DEFAULT_SUBJECTS = [
     "neutral",
     "happy",
     "sad",
@@ -39,6 +39,12 @@ SUBJECTS = [
     "concerned, sitting",
     "happy, arms raised",
 ]
+# Override with SUBJECTS env (";"-separated) to test other prompts, e.g. poses.
+SUBJECTS = (
+    [s.strip() for s in os.environ["SUBJECTS"].split(";") if s.strip()]
+    if os.environ.get("SUBJECTS")
+    else _DEFAULT_SUBJECTS
+)
 PROMPT = "olive green adult bufo, {s}, soft-shaded cartoon sticker"
 NEG = "deformed, blurry, low quality, extra limbs, teeth, fangs, text, watermark"
 

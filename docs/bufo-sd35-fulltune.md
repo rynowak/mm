@@ -84,3 +84,46 @@ Grid: `/mnt/ray/bufo-runs/sd35-large-lora/eval/`.
   env that includes rembg.
 - In Ray `bash -lc` entrypoints, **shell variables can come back empty** — use literal paths
   or drive from `python -c` instead.
+
+## Teacher distillation — pose/expression variety (2026-06-30 → 07-01)
+
+v1 was identity-good but **pose-narrow** (head-shot only). The push: use a frontier teacher
+(**Gemini 2.5 Flash Image / "Nano Banana"** via OpenRouter) to generate diverse on-model bufo
+training data, then full-FT the SD3.5-Medium student on it. Tooling in **`bufo/teacher/`**
+(`openrouter_edit.py` client, `grid_gen.py`/`grid_batch.py` grid→grid, `single_gen.py`
+concurrent singles, `slice_grids.py`, `build_train_set.py`). Needs `OPENROUTER_API_KEY`.
+
+Findings, hard-won (all user-verified):
+- **GRID→GRID is the teacher recipe.** Feed one image that is a grid of clean bufos, ask for
+  a new grid of the same character in new poses/expressions. One coherent edit → identity +
+  variety. Separate-image "draw the character doing X" **drifts** to a generic frog.
+- **Prompts must be ALL-POSITIVE** (these models latch onto the noun in "no X"): "smooth
+  mouth" not "no teeth"; "flat slim body" not "not chubby"; "exact same colors as reference".
+- **DUAL-IDENTITY is poison.** Training on `canon_v2` (real bufo) + teacher singles (Gemini's
+  bufo) blends two characters → bad identity + misshapen heads. **Teacher-ONLY data fixed it**
+  immediately (identity + variety + novel-prompt generalization, e.g. "humbly eating noodles").
+- **Effective resolution = subject-fills-frame.** Grid cells were ~300px → blurry student.
+  Crop each output to the subject bbox + square-pad; single-output (one bufo/image) gives a
+  bigger subject than grid cells.
+- **REMAINING WALL: extra-limbs / mangled full-body anatomy.** The student renders bust/head
+  cleanly but mangles limbs on full-body poses. This **persisted teacher-only from 224 → 467
+  clean images** — more clean data did not fix it. User's read: **bigger model is NOT the
+  right lever.** Leading untested hypothesis: subtly-mangled teacher singles slipped through
+  curation (done at ~170px thumbnails) → **re-curate at full resolution** and retrain.
+
+## Resume guide (picking this up on a new machine)
+
+- **Code:** GitHub, this repo, branch **`phantom-colony`** — `bufo/teacher/` (distillation
+  pipeline) + `bufo/cluster/` (SD3.5 full-FT / eval / sticker scripts).
+- **Curated data + all artifacts:** private HF dataset **`rynowak/bufo-experiment-data`** —
+  `dataset3/singles/` (467 curated teacher singles + `metadata.jsonl`), `seeds/refs/`
+  (character sheet), `grid/input_grid.png` (the recipe seed), and every eval/bake-off grid.
+- **Durable model:** private HF **`rynowak/bufo-sd35-medium-ft`** — the v1 "that's him"
+  checkpoint-1000 (load base SD3.5-medium, swap in its `transformer/`).
+- **Secrets:** `OPENROUTER_API_KEY` + `HF_API_KEY` live in `~/.zshrc.local` (never committed);
+  re-add them on the new machine.
+- **Compute:** the picasso Ray cluster used for training was torn down — re-provision a GPU
+  (A100-class) for any retrain; the teacher data-gen runs locally (API only, no GPU).
+- **State + next step:** teacher-only student holds identity + variety but **mangles full-body
+  anatomy**; the agreed next lever is to **re-curate the singles at full resolution** (drop the
+  subtle mangles the thumbnail pass missed) and retrain teacher-only — NOT a bigger model.
